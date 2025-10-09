@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Django migrations cache
+**/migrations/*.pyc
+
+# VS Code settings
+.vscode/
+
+# Python virtualenvs
+venv/
+env/
+.venv/
+
+# Environment variables
+.env
+
+# OS junk
+.DS_Store
+Thumbs.db
