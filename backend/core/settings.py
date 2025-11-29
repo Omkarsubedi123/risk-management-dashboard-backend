@@ -60,6 +60,10 @@ MIDDLEWARE = [
 ROOT_URLCONF = 'core.urls'
 
 CORS_ALLOW_ALL_ORIGINS = True  # Allow all origins for CORS
+# CORS_ALLOW_HEADERS = [
+#     'content-type',
+#     'authorization',
+# ]
 
 TEMPLATES = [
     {
@@ -140,6 +144,9 @@ AUTH_USER_MODEL = 'users.CustomUser'  # Custom user model
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES':(
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES':(
+        'rest_framework.permissions.IsAuthenticated',
     ),
 }
 
