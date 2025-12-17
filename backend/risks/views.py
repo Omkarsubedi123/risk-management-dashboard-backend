@@ -7,10 +7,13 @@ class RiskViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        project_id = self.request.query_params.get("project")
         queryset = Risk.objects.all()
 
+        project_id = self.request.query_params.get("project")
         if project_id:
             queryset = queryset.filter(project_id=project_id)
 
-        return queryset
+        return queryset.order_by("-created_at")
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)

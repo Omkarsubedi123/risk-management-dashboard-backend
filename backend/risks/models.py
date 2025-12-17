@@ -1,9 +1,33 @@
 from django.db import models
+from django.conf import settings
 from projects.models import Project
 
+User = settings.AUTH_USER_MODEL
+
+
 class Risk(models.Model):
+
+    STATUS_CHOICES = [
+        ("Open", "Open"),
+        ("InProgress", "In Progress"),
+        ("Closed", "Closed"),
+    ]
+
+    MITIGATION_STATUS_CHOICES = [
+        ("NotStarted", "Not Started"),
+        ("Ongoing", "Ongoing"),
+        ("Completed", "Completed"),
+    ]
+
+    DECISION_CHOICES = [
+        ("Avoid", "Avoid"),
+        ("Mitigate", "Mitigate"),
+        ("Transfer", "Transfer"),
+        ("Accept", "Accept"),
+    ]
+
     project = models.ForeignKey(
-        "projects.Project",
+        Project,
         on_delete=models.CASCADE,
         related_name="risks"
     )
@@ -19,10 +43,39 @@ class Risk(models.Model):
 
     estimated_cost = models.DecimalField(max_digits=12, decimal_places=2)
     loss_percentage = models.PositiveSmallIntegerField()
-    calculated_loss = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
+    calculated_loss = models.DecimalField(
+        max_digits=12, decimal_places=2, blank=True, null=True
+    )
 
-    risk_decision = models.CharField(max_length=30)
-    assigned_to = models.CharField(max_length=100)
+    risk_decision = models.CharField(
+        max_length=20, choices=DECISION_CHOICES
+    )
+
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default="Open"
+    )
+
+    mitigation_status = models.CharField(
+        max_length=20,
+        choices=MITIGATION_STATUS_CHOICES,
+        default="NotStarted"
+    )
+
+    mitigation_plan = models.TextField(blank=True)
+
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="assigned_risks"
+    )
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="created_risks"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -43,3 +96,6 @@ class Risk(models.Model):
         )
 
         super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.title
