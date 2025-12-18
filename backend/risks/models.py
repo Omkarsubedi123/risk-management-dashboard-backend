@@ -1,11 +1,16 @@
 from django.db import models
-from django.conf import settings
+from users.models import CustomUser
 from projects.models import Project
-
-User = settings.AUTH_USER_MODEL
 
 
 class Risk(models.Model):
+
+    RISK_DECISION_CHOICES = [
+        ("Avoid", "Avoid"),
+        ("Mitigate", "Mitigate"),
+        ("Transfer", "Transfer"),
+        ("Accept", "Accept"),
+    ]
 
     STATUS_CHOICES = [
         ("Open", "Open"),
@@ -15,15 +20,20 @@ class Risk(models.Model):
 
     MITIGATION_STATUS_CHOICES = [
         ("NotStarted", "Not Started"),
-        ("Ongoing", "Ongoing"),
+        ("InProgress", "In Progress"),
         ("Completed", "Completed"),
     ]
 
-    DECISION_CHOICES = [
-        ("Avoid", "Avoid"),
-        ("Mitigate", "Mitigate"),
-        ("Transfer", "Transfer"),
-        ("Accept", "Accept"),
+    LIKELIHOOD_CHOICES = [
+        ("Low", "Low"),
+        ("Medium", "Medium"),
+        ("High", "High"),
+    ]
+
+    SEVERITY_CHOICES = [
+        ("Low", "Low"),
+        ("Medium", "Medium"),
+        ("High", "High"),
     ]
 
     project = models.ForeignKey(
@@ -32,68 +42,86 @@ class Risk(models.Model):
         related_name="risks"
     )
 
+    created_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="created_risks"
+    )
+
+    assigned_to = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_risks"
+    )
+
     title = models.CharField(max_length=255)
     description = models.TextField()
 
-    impact = models.PositiveSmallIntegerField()
-    probability = models.PositiveSmallIntegerField()
+    probability = models.PositiveIntegerField()
+    impact = models.PositiveIntegerField()
 
-    risk_score = models.PositiveSmallIntegerField(blank=True, null=True)
-    risk_level = models.CharField(max_length=20, blank=True)
-
-    estimated_cost = models.DecimalField(max_digits=12, decimal_places=2)
-    loss_percentage = models.PositiveSmallIntegerField()
-    calculated_loss = models.DecimalField(
-        max_digits=12, decimal_places=2, blank=True, null=True
+    risk_score = models.PositiveIntegerField(blank=True, null=True)
+    likelihood = models.CharField(
+        max_length=10,
+        choices=LIKELIHOOD_CHOICES,
+        blank=True,
+        null=True
+    )
+    risk_level = models.CharField(
+        max_length=10,
+        choices=SEVERITY_CHOICES,
+        blank=True,
+        null=True
     )
 
+    estimated_cost = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+    loss_percentage = models.PositiveIntegerField(null=True, blank=True)
+
     risk_decision = models.CharField(
-        max_length=20, choices=DECISION_CHOICES
+        max_length=20,
+        choices=RISK_DECISION_CHOICES
     )
 
     status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default="Open"
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="Open"
     )
 
+    mitigation_plan = models.TextField(blank=True)
     mitigation_status = models.CharField(
         max_length=20,
         choices=MITIGATION_STATUS_CHOICES,
         default="NotStarted"
     )
 
-    mitigation_plan = models.TextField(blank=True)
-
-    assigned_to = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True,
-        related_name="assigned_risks"
-    )
-
-    created_by = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True,
-        related_name="created_risks"
-    )
-
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        self.risk_score = self.impact * self.probability
+        self.risk_score = self.probability * self.impact
+
+        if self.probability <= 2:
+            self.likelihood = "Low"
+        elif self.probability == 3:
+            self.likelihood = "Medium"
+        else:
+            self.likelihood = "High"
 
         if self.risk_score <= 5:
             self.risk_level = "Low"
-        elif self.risk_score <= 10:
+        elif self.risk_score <= 12:
             self.risk_level = "Medium"
-        elif self.risk_score <= 15:
-            self.risk_level = "Medium-High"
         else:
             self.risk_level = "High"
-
-        self.calculated_loss = (
-            self.estimated_cost * self.loss_percentage / 100
-        )
 
         super().save(*args, **kwargs)
 

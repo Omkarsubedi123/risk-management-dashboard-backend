@@ -7,14 +7,19 @@ class RiskSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Risk
-        exclude = (
+        fields = "__all__"
+        read_only_fields = (
+            "created_by",
             "risk_score",
+            "likelihood",
             "risk_level",
-            "calculated_loss",
+            "mitigation_status",
             "created_at",
+            "updated_at",
         )
 
-    def create(self, validated_data):
-        request = self.context.get("request")
-        validated_data["created_by"] = request.user
-        return super().create(validated_data)
+
+class RiskMitigationUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Risk
+        fields = ("mitigation_plan", "mitigation_status")
