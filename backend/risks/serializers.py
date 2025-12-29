@@ -5,6 +5,14 @@ from .models import Risk
 class RiskSerializer(serializers.ModelSerializer):
     created_by = serializers.ReadOnlyField(source="created_by.id")
 
+    # ✅ REQUIRED FOR GLOBAL RISK TABLE
+    project_name = serializers.CharField(
+        source="project.name", read_only=True
+    )
+    project_id = serializers.IntegerField(
+        source="project.id", read_only=True
+    )
+
     class Meta:
         model = Risk
         fields = "__all__"
@@ -13,7 +21,6 @@ class RiskSerializer(serializers.ModelSerializer):
             "risk_score",
             "likelihood",
             "risk_level",
-            "mitigation_status",
             "created_at",
             "updated_at",
         )

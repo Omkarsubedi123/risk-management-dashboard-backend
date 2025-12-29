@@ -1,7 +1,8 @@
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
+from django.db.models import Q
 
 from .models import Risk
 from .serializers import RiskSerializer, RiskMitigationUpdateSerializer
@@ -13,7 +14,7 @@ class RiskViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Risk.objects.all()
+        queryset = Risk.objects.select_related("project")
 
         if user.role == "PM":
             queryset = queryset.filter(created_by=user)
@@ -52,3 +53,36 @@ class RiskMitigationUpdateView(APIView):
             return Response(serializer.data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GlobalRiskListView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = RiskSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = Risk.objects.select_related("project", "assigned_to")
+
+        # 🔹 Permission logic
+        if not user.is_staff:
+            queryset = queryset.filter(
+                Q(created_by=user) | Q(assigned_to=user)
+            )
+
+        # 🔹 Manual filters (THIS FIXES YOUR ISSUE)
+        risk_level = self.request.query_params.get("risk_level")
+        status = self.request.query_params.get("status")
+        mitigation_status = self.request.query_params.get("mitigation_status")
+
+        if risk_level:
+            queryset = queryset.filter(risk_level=risk_level)
+
+        if status:
+            queryset = queryset.filter(status=status)
+
+        if mitigation_status:
+            queryset = queryset.filter(
+                mitigation_status=mitigation_status
+            )
+
+        return queryset.order_by("-created_at")

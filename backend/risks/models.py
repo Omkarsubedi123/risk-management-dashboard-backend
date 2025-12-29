@@ -83,7 +83,6 @@ class Risk(models.Model):
         null=True,
         blank=True
     )
-    loss_percentage = models.PositiveIntegerField(null=True, blank=True)
 
     risk_decision = models.CharField(
         max_length=20,

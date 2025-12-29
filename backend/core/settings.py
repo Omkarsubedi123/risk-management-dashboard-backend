@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'users',  # Custom user app
     'projects',  # Project management app
     'risks',  # Risk management app
+    'django_filters',
 ]
 
 MIDDLEWARE = [
