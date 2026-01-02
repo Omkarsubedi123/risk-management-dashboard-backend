@@ -1,15 +1,26 @@
 # projects/views.py
+
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.conf import settings
+from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
 
 from .models import Project, ProjectTeam, Invite
-from .serializers import ProjectSerializer, InviteSerializer, ProjectTeamSerializer
+from .serializers import (
+    ProjectSerializer,
+    InviteSerializer,
+    ProjectTeamSerializer,
+)
 from .permissions import IsProjectPMOrReadOnly, IsProjectPM
 
 User = get_user_model()
+
+# =========================
+# PROJECT VIEWS
+# =========================
 
 class ProjectListCreateView(generics.ListCreateAPIView):
     serializer_class = ProjectSerializer
@@ -17,23 +28,29 @@ class ProjectListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        # If user has explicit role field and is PM, show created projects
         role = getattr(user, "role", None)
+
         if role == "PM":
             return Project.objects.filter(created_by=user).order_by("-created_at")
-        # otherwise show projects where user is member
+
         return Project.objects.filter(team__user=user).order_by("-created_at")
 
     def perform_create(self, serializer):
         project = serializer.save(created_by=self.request.user)
-        # add creator as PM in ProjectTeam
-        ProjectTeam.objects.get_or_create(project=project, user=self.request.user, defaults={"role": ProjectTeam.ROLE_PM})
+        ProjectTeam.objects.get_or_create(
+            project=project,
+            user=self.request.user,
+            defaults={"role": ProjectTeam.ROLE_PM},
+        )
 
 
 class ProjectDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
-    permission_classes = [permissions.IsAuthenticated, IsProjectPMOrReadOnly]
+    permission_classes = [
+        permissions.IsAuthenticated,
+        IsProjectPMOrReadOnly,
+    ]
 
 
 class ProjectMembersView(generics.ListAPIView):
@@ -41,13 +58,12 @@ class ProjectMembersView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        project_id = self.kwargs.get("pk")
-        project = get_object_or_404(Project, pk=project_id)
+        project = get_object_or_404(Project, pk=self.kwargs.get("pk"))
         user = self.request.user
-        # allow view if user is PM (creator) or member
+
         if project.created_by == user or project.team.filter(user=user).exists():
             return ProjectTeam.objects.filter(project=project)
-        # else return empty queryset (client will get 200 with empty list or you can raise 403)
+
         return ProjectTeam.objects.none()
 
 
@@ -57,12 +73,17 @@ class RemoveMemberView(generics.DestroyAPIView):
     queryset = ProjectTeam.objects.all()
 
     def perform_destroy(self, instance):
-        # Prevent removing PM
         if instance.role == ProjectTeam.ROLE_PM:
             from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("Cannot remove the Project Manager from the project.")
+            raise PermissionDenied(
+                "Cannot remove the Project Manager from the project."
+            )
         instance.delete()
 
+
+# =========================
+# INVITATION VIEWS (EMAIL BASED)
+# =========================
 
 class InviteCreateView(generics.GenericAPIView):
     serializer_class = InviteSerializer
@@ -70,63 +91,111 @@ class InviteCreateView(generics.GenericAPIView):
 
     def post(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
-        # check PM permission
         self.check_object_permissions(request, project)
 
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        email = serializer.validated_data["email"].lower()
+        email = request.data.get("email", "").lower()
+        role = request.data.get("role", ProjectTeam.ROLE_TM)
 
-        invited_user = None
-        try:
-            invited_user = User.objects.get(email__iexact=email)
-        except User.DoesNotExist:
-            invited_user = None
+        if not email:
+            return Response(
+                {"detail": "Email is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        invited_user = User.objects.filter(email__iexact=email).first()
 
         invite, created = Invite.objects.get_or_create(
             project=project,
             email=email,
-            defaults={"invited_by": request.user, "invited_user": invited_user}
+            defaults={
+                "invited_by": request.user,
+                "invited_user": invited_user,
+                "role": role,
+            },
         )
 
         if not created:
-            return Response({"detail": "Invite already exists."}, status=status.HTTP_200_OK)
+            return Response(
+                {"detail": "Invite already exists."},
+                status=status.HTTP_200_OK,
+            )
 
-        # If user exists, add immediately as member
+        # If user already exists → auto add
         if invited_user:
-            ProjectTeam.objects.get_or_create(project=project, user=invited_user, defaults={"role": ProjectTeam.ROLE_TM})
-            invite.invited_user = invited_user
+            ProjectTeam.objects.get_or_create(
+                project=project,
+                user=invited_user,
+                defaults={"role": role},
+            )
             invite.accepted = True
             invite.accepted_at = timezone.now()
             invite.save()
-            return Response({"detail": "User added to project."}, status=status.HTTP_201_CREATED)
 
-        # else TODO: send email with invite.token (frontend link)
-        # Example link: f"{FRONTEND_URL}/accept-invite?token={invite.token}"
-        return Response({"detail": "Invite created; user must accept or sign up."}, status=status.HTTP_201_CREATED)
+            return Response(
+                {"detail": "User added to project."},
+                status=status.HTTP_201_CREATED,
+            )
+
+        # Send email invitation
+        invite_link = (
+            f"{settings.FRONTEND_URL}/accept-invite?token={invite.token}"
+        )
+
+        send_mail(
+            subject="Project Invitation",
+            message=(
+                f"You have been invited to join the project "
+                f"'{project.name}'.\n\n"
+                f"Click the link below to accept the invitation:\n"
+                f"{invite_link}"
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+
+        return Response(
+            {"detail": "Invitation email sent."},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class InviteAcceptView(generics.GenericAPIView):
-    serializer_class = InviteSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         token = request.data.get("token")
+
         if not token:
-            return Response({"detail": "Token is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "Token is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        invite = get_object_or_404(Invite, token=token)
-        if invite.accepted:
-            return Response({"detail": "Invite already accepted."}, status=status.HTTP_400_BAD_REQUEST)
+        invite = get_object_or_404(
+            Invite,
+            token=token,
+            accepted=False,
+        )
 
-        # email must match logged-in user
         if request.user.email.lower() != invite.email.lower():
-            return Response({"detail": "This invite is for a different email."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"detail": "This invite is for a different email."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
-        membership, created = ProjectTeam.objects.get_or_create(project=invite.project, user=request.user, defaults={"role": ProjectTeam.ROLE_TM})
+        ProjectTeam.objects.get_or_create(
+            project=invite.project,
+            user=request.user,
+            defaults={"role": invite.role},
+        )
+
         invite.invited_user = request.user
         invite.accepted = True
         invite.accepted_at = timezone.now()
         invite.save()
 
-        return Response({"detail": "Invite accepted. You are now a team member."}, status=status.HTTP_200_OK)
+        return Response(
+            {"detail": "Invitation accepted successfully."},
+            status=status.HTTP_200_OK,
+        )

@@ -165,6 +165,7 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = 'omsubedi28@gmail.com'          # Replace with your Gmail address
 EMAIL_HOST_PASSWORD = 'qwdxkwnmcjydryyf'       # Replace with your Gmail App Password
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+FRONTEND_URL = "http://localhost:5137/"
 
 
 # import os

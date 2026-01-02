@@ -1,8 +1,12 @@
 # projects/urls.py
 from django.urls import path
 from .views import (
-    ProjectListCreateView, ProjectDetailView, ProjectMembersView,
-    RemoveMemberView, InviteCreateView, InviteAcceptView
+    ProjectListCreateView,
+    ProjectDetailView,
+    ProjectMembersView,
+    RemoveMemberView,
+    InviteCreateView,
+    InviteAcceptView,
 )
 
 urlpatterns = [

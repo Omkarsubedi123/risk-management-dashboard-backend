@@ -1,30 +1,46 @@
-# projects/permissions.py
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 from .models import ProjectTeam
 
+
 class IsProjectPMOrReadOnly(BasePermission):
     """
-    PM (project creator) or team member read-only.
-    PM can edit/delete (unsafe methods); others only safe methods.
+    - Project Manager (PM) can perform all actions
+    - Team members can READ only (safe methods)
     """
 
     def has_object_permission(self, request, view, obj):
-        # Safe methods (GET/HEAD/OPTIONS) allowed to any authenticated user who can access the object
+        # Allow safe methods to project creator or team members
         if request.method in SAFE_METHODS:
+            return (
+                obj.created_by == request.user or
+                ProjectTeam.objects.filter(project=obj, user=request.user).exists()
+            )
+
+        # Unsafe methods → only PM allowed
+        if obj.created_by == request.user:
             return True
 
-        # Unsafe methods: allow only if user is the creator (PM)
-        return obj.created_by == request.user
+        return ProjectTeam.objects.filter(
+            project=obj,
+            user=request.user,
+            role=ProjectTeam.ROLE_PM
+        ).exists()
 
 
 class IsProjectPM(BasePermission):
     """
-    Only project PM (team role=PM) allowed.
+    Only Project Managers are allowed.
+    (Creator OR team role = PM)
     """
 
     def has_object_permission(self, request, view, obj):
-        try:
-            membership = ProjectTeam.objects.get(project=obj, user=request.user)
-            return membership.role == ProjectTeam.ROLE_PM
-        except ProjectTeam.DoesNotExist:
-            return False
+        # Creator is always PM
+        if obj.created_by == request.user:
+            return True
+
+        # Check PM role in team
+        return ProjectTeam.objects.filter(
+            project=obj,
+            user=request.user,
+            role=ProjectTeam.ROLE_PM
+        ).exists()
