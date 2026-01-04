@@ -7,17 +7,29 @@ User = get_user_model()
 
 
 class ProjectTeamSerializer(serializers.ModelSerializer):
-    user_email = serializers.SerializerMethodField()
+    email = serializers.SerializerMethodField()
+    username = serializers.SerializerMethodField()
+    full_name = serializers.SerializerMethodField()
     user_id = serializers.IntegerField(source="user.id", read_only=True)
 
     class Meta:
         model = ProjectTeam
-        fields = ("id", "user_id", "user_email", "role", "invited_at")
+        fields = ("id", "user_id", "email", "username", "full_name", "role", "invited_at")
 
-    def get_user_email(self, obj):
+    def get_email(self, obj):
         return obj.user.email
 
+    def get_username(self, obj):
+        return obj.user.username or obj.user.email
 
+    def get_full_name(self, obj):
+        # Works even if full_name does not exist in User model
+        if hasattr(obj.user, "get_full_name"):
+            name = obj.user.get_full_name()
+            if name:
+                return name
+        return obj.user.username or obj.user.email
+   
 class ProjectSerializer(serializers.ModelSerializer):
     team = ProjectTeamSerializer(source="team.all", many=True, read_only=True)
     created_by_email = serializers.SerializerMethodField()

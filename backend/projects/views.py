@@ -85,6 +85,80 @@ class RemoveMemberView(generics.DestroyAPIView):
 # INVITATION VIEWS (EMAIL BASED)
 # =========================
 
+# class InviteCreateView(generics.GenericAPIView):
+#     serializer_class = InviteSerializer
+#     permission_classes = [permissions.IsAuthenticated, IsProjectPM]
+
+#     def post(self, request, pk):
+#         project = get_object_or_404(Project, pk=pk)
+#         self.check_object_permissions(request, project)
+
+#         email = request.data.get("email", "").lower()
+#         role = request.data.get("role", ProjectTeam.ROLE_TM)
+
+#         if not email:
+#             return Response(
+#                 {"detail": "Email is required."},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         invited_user = User.objects.filter(email__iexact=email).first()
+
+#         invite, created = Invite.objects.get_or_create(
+#             project=project,
+#             email=email,
+#             defaults={
+#                 "invited_by": request.user,
+#                 "invited_user": invited_user,
+#                 "role": role,
+#             },
+#         )
+
+#         if not created:
+#             return Response(
+#                 {"detail": "Invite already exists."},
+#                 status=status.HTTP_200_OK,
+#             )
+
+#         # If user already exists → auto add
+#         if invited_user:
+#             ProjectTeam.objects.get_or_create(
+#                 project=project,
+#                 user=invited_user,
+#                 defaults={"role": role},
+#             )
+#             invite.accepted = True
+#             invite.accepted_at = timezone.now()
+#             invite.save()
+
+#             return Response(
+#                 {"detail": "User added to project."},
+#                 status=status.HTTP_201_CREATED,
+#             )
+
+#         # Send email invitation
+#         invite_link = (
+#             f"{settings.FRONTEND_URL}/accept-invite?token={invite.token}"
+#         )
+
+#         send_mail(
+#             subject="Project Invitation",
+#             message=(
+#                 f"You have been invited to join the project "
+#                 f"'{project.name}'.\n\n"
+#                 f"Click the link below to accept the invitation:\n"
+#                 f"{invite_link}"
+#             ),
+#             from_email=settings.DEFAULT_FROM_EMAIL,
+#             recipient_list=[email],
+#             fail_silently=False,
+#         )
+
+#         return Response(
+#             {"detail": "Invitation email sent."},
+#             status=status.HTTP_201_CREATED,
+#         )
+
 class InviteCreateView(generics.GenericAPIView):
     serializer_class = InviteSerializer
     permission_classes = [permissions.IsAuthenticated, IsProjectPM]
@@ -93,8 +167,8 @@ class InviteCreateView(generics.GenericAPIView):
         project = get_object_or_404(Project, pk=pk)
         self.check_object_permissions(request, project)
 
-        email = request.data.get("email", "").lower()
-        role = request.data.get("role", ProjectTeam.ROLE_TM)
+        email = request.data.get("email", "").lower().strip()
+        role = ProjectTeam.ROLE_TM  # 🔒 PM cannot invite another PM
 
         if not email:
             return Response(
@@ -104,42 +178,51 @@ class InviteCreateView(generics.GenericAPIView):
 
         invited_user = User.objects.filter(email__iexact=email).first()
 
-        invite, created = Invite.objects.get_or_create(
+        # 🔴 Prevent duplicate accepted invite
+        existing_invite = Invite.objects.filter(
             project=project,
             email=email,
-            defaults={
-                "invited_by": request.user,
-                "invited_user": invited_user,
-                "role": role,
-            },
-        )
+        ).first()
 
-        if not created:
+        if existing_invite:
+            if existing_invite.accepted:
+                return Response(
+                    {"detail": "User is already a member of this project."},
+                    status=status.HTTP_200_OK,
+                )
             return Response(
-                {"detail": "Invite already exists."},
+                {"detail": "Invitation already sent."},
                 status=status.HTTP_200_OK,
             )
 
-        # If user already exists → auto add
+        # Create invite
+        invite = Invite.objects.create(
+            project=project,
+            email=email,
+            invited_by=request.user,
+            invited_user=invited_user,
+            role=role,
+        )
+
+        # ✅ AUTO-ACCEPT IF USER EXISTS
         if invited_user:
-            ProjectTeam.objects.get_or_create(
+            ProjectTeam.objects.update_or_create(
                 project=project,
                 user=invited_user,
-                defaults={"role": role},
+                defaults={"role": ProjectTeam.ROLE_TM},
             )
+
             invite.accepted = True
             invite.accepted_at = timezone.now()
-            invite.save()
+            invite.save(update_fields=["accepted", "accepted_at"])
 
             return Response(
                 {"detail": "User added to project."},
                 status=status.HTTP_201_CREATED,
             )
 
-        # Send email invitation
-        invite_link = (
-            f"{settings.FRONTEND_URL}/accept-invite?token={invite.token}"
-        )
+        # 📧 Email invite for non-registered users
+        invite_link = f"{settings.FRONTEND_URL}/accept-invite?token={invite.token}"
 
         send_mail(
             subject="Project Invitation",

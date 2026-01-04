@@ -1,5 +1,5 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
-from .models import ProjectTeam
+from .models import Project, ProjectTeam
 
 
 class IsProjectPMOrReadOnly(BasePermission):
@@ -35,8 +35,12 @@ class IsProjectPM(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         # Creator is always PM
-        if obj.created_by == request.user:
-            return True
+        user = request.user
+        if isinstance(obj,Project):
+            return obj.created_by == user
+        
+        if isinstance(obj, ProjectTeam):
+            return obj.project.created_by == user
 
         # Check PM role in team
         return ProjectTeam.objects.filter(
