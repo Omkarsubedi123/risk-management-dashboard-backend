@@ -35,6 +35,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     created_by_email = serializers.SerializerMethodField()
 
     class Meta:
+        
         model = Project
         fields = "__all__"
         read_only_fields = ("created_by", "created_at", "updated_at")
