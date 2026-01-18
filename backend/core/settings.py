@@ -46,7 +46,8 @@ INSTALLED_APPS = [
     'risks',  # Risk management app
     'django_filters',
     'notifications',  # Notification app
-    'dashboardpm' # Dashboard for Project Manager
+    'dashboardpm', # Dashboard for Project Manager
+    'reports',  # Reporting app
 ]
 
 MIDDLEWARE = [
