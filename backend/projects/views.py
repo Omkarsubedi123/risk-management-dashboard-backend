@@ -272,3 +272,22 @@ class InviteAcceptView(generics.GenericAPIView):
             {"detail": "Invitation accepted successfully."},
             status=status.HTTP_200_OK,
         )
+
+
+# Team Members 
+from .serializers import ProjectSummarySerializer
+
+class MyProjectsView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ProjectSummarySerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        role = getattr(user, "role", None)
+
+        # PM: projects they created
+        if role == "PM":
+            return Project.objects.filter(created_by=user).order_by("-updated_at")
+
+        # TM: projects where they are in ProjectTeam (team related_name)
+        return Project.objects.filter(team__user=user).distinct().order_by("-updated_at")

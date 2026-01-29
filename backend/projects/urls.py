@@ -7,6 +7,7 @@ from .views import (
     RemoveMemberView,
     InviteCreateView,
     InviteAcceptView,
+    MyProjectsView,
 )
 
 urlpatterns = [
@@ -16,4 +17,5 @@ urlpatterns = [
     path("<int:pk>/members/<int:member_id>/remove/", RemoveMemberView.as_view(), name="remove-member"),
     path("<int:pk>/invite/", InviteCreateView.as_view(), name="project-invite"),
     path("invite/accept/", InviteAcceptView.as_view(), name="invite-accept"),
+    path("my/", MyProjectsView.as_view(), name="my-projects"),
 ]

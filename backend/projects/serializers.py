@@ -62,3 +62,33 @@ class InviteSerializer(serializers.ModelSerializer):
 
     def get_invited_by_email(self, obj):
         return obj.invited_by.email
+    
+# Team Member part form here 
+# from rest_framework import serializers
+# from .models import Project
+
+class ProjectSummarySerializer(serializers.ModelSerializer):
+    team_count = serializers.SerializerMethodField()
+    pm_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Project
+        fields = (
+            "id",
+            "name",
+            "description",
+            "sector",
+            "status",
+            "created_at",
+            "updated_at",
+            "team_count",
+            "pm_email",
+        )
+
+    def get_team_count(self, obj):
+        # you use ProjectTeam with related_name "team"
+        return obj.team.count()
+
+    def get_pm_email(self, obj):
+        return obj.created_by.email if obj.created_by else ""
+
