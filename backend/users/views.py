@@ -1,8 +1,10 @@
-# users/views.py
 from rest_framework import generics, status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
+
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 
 from .serializers import (
     SignupSerializer,
@@ -81,3 +83,66 @@ class ConfirmResetPasswordView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response({"message": "Password reset successfully."}, status=status.HTTP_200_OK)
+
+
+# ==========================
+# ✅ PROFILE: GET/PATCH /me/
+# ==========================
+class MeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        u = request.user
+        return Response({
+            "id": u.id,
+            "email": u.email,
+            "username": getattr(u, "username", "") or "",
+            "first_name": getattr(u, "first_name", "") or "",
+            "last_name": getattr(u, "last_name", "") or "",
+            "role": getattr(u, "role", "") or "",
+        }, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        u = request.user
+        data = request.data or {}
+
+        if "username" in data:
+            u.username = (data.get("username") or "").strip()
+
+        if "first_name" in data:
+            u.first_name = (data.get("first_name") or "").strip()
+
+        if "last_name" in data:
+            u.last_name = (data.get("last_name") or "").strip()
+
+        u.save(update_fields=["username", "first_name", "last_name"])
+        return Response({"detail": "Profile updated successfully."}, status=status.HTTP_200_OK)
+
+
+# =================================
+# ✅ CHANGE PASSWORD: POST /change-password/
+# =================================
+class ChangePasswordView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        u = request.user
+
+        current_password = request.data.get("current_password", "")
+        new_password = request.data.get("new_password", "")
+        confirm_password = request.data.get("confirm_password", "")
+
+        if not u.check_password(current_password):
+            return Response({"detail": "Current password is incorrect."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_password != confirm_password:
+            return Response({"detail": "New password and confirm password do not match."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            validate_password(new_password, user=u)
+        except ValidationError as e:
+            return Response({"detail": " ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+        u.set_password(new_password)
+        u.save()
+        return Response({"detail": "Password changed successfully."}, status=status.HTTP_200_OK)

@@ -8,6 +8,8 @@ from .views import (
     RequestPasswordResetView,
     ConfirmResetPasswordView,
 )
+from .views import MeView, ChangePasswordView
+
 
 urlpatterns = [
     # Auth
@@ -19,4 +21,6 @@ urlpatterns = [
     # Password reset (OTP-based)
     path('password/reset/', RequestPasswordResetView.as_view(), name='password-reset'),
     path('password/reset/confirm/', ConfirmResetPasswordView.as_view(), name='password-reset-confirm'),
+    path("me/", MeView.as_view(), name="me"),
+    path("change-password/", ChangePasswordView.as_view(), name="change-password"),
 ]
