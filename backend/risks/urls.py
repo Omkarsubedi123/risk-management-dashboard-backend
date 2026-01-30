@@ -4,12 +4,14 @@ from .views import (
     RiskViewSet,
     RiskMitigationUpdateView,
     GlobalRiskListView,
+    MyRisksView,
 )
 
 router = DefaultRouter()
 router.register(r"risks", RiskViewSet, basename="risk")
 
 urlpatterns = [
+    path("risks/my/", MyRisksView.as_view()),
     path(
         "risks/global/",
         GlobalRiskListView.as_view(),
@@ -21,4 +23,5 @@ urlpatterns = [
         name="risk-mitigation-update"
     ),
     path("", include(router.urls)),
+    
 ]

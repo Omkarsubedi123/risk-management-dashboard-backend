@@ -64,8 +64,6 @@ class InviteSerializer(serializers.ModelSerializer):
         return obj.invited_by.email
     
 # Team Member part form here 
-# from rest_framework import serializers
-# from .models import Project
 
 class ProjectSummarySerializer(serializers.ModelSerializer):
     team_count = serializers.SerializerMethodField()
