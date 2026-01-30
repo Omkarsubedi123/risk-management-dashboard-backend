@@ -1,12 +1,11 @@
 from rest_framework import viewsets, permissions, status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 
 from notifications.utils import create_notification
-from projects.models import Project
-
 from .models import Risk
 from .serializers import RiskSerializer, RiskMitigationUpdateSerializer
 
@@ -17,29 +16,69 @@ class RiskViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Risk.objects.select_related("project")
+        qs = Risk.objects.select_related("project", "assigned_to", "created_by")
 
-        if getattr(user, "role", None) == "PM":
-            queryset = queryset.filter(created_by=user)
+        role = getattr(user, "role", None)
+
+        # ✅ PM: must see risks in projects they own (NOT only created_by=user)
+        # This allows PM to see TM-submitted risks too.
+        if role == "PM":
+            qs = qs.filter(project__created_by=user)
+
+        # ✅ TM: see assigned risks + risks they created
         else:
-            queryset = queryset.filter(assigned_to=user)
+            qs = qs.filter(Q(assigned_to=user) | Q(created_by=user))
 
+        # optional filter: by project
         project_id = self.request.query_params.get("project")
         if project_id:
-            queryset = queryset.filter(project_id=project_id)
+            qs = qs.filter(project_id=project_id)
 
-        return queryset.order_by("-created_at")
+        # optional filter: approval_status (used for PM approvals page later)
+        approval_status_param = self.request.query_params.get("approval_status")
+        if approval_status_param:
+            qs = qs.filter(approval_status=approval_status_param)
 
-    # ✅ Risk Created Notification
+        return qs.order_by("-created_at")
+
+    # ✅ Risk Created Notification + approval workflow
     def perform_create(self, serializer):
-        risk = serializer.save(created_by=self.request.user)
+        user = self.request.user
+        role = getattr(user, "role", None)
 
-        # Project is available via risk.project
-        create_notification(
-            self.request.user,
-            "Risk Created",
-            f"A new risk was added to project '{risk.project.name}'."
-        )
+        risk = serializer.save(created_by=user)
+
+        # TM submits -> pending approval and notify PM
+        if role == "TM":
+            risk.approval_status = "pending"
+            risk.save(update_fields=["approval_status"])
+
+            pm_user = risk.project.created_by
+
+            # Notify PM
+            create_notification(
+                pm_user,
+                "New Risk Submitted",
+                f"TM submitted risk '{risk.title}' in project '{risk.project.name}'."
+            )
+
+            # Notify TM (confirmation)
+            create_notification(
+                user,
+                "Risk Submitted",
+                f"Your risk '{risk.title}' was submitted for PM approval."
+            )
+
+        # PM creates -> approved
+        else:
+            risk.approval_status = "approved"
+            risk.save(update_fields=["approval_status"])
+
+            create_notification(
+                user,
+                "Risk Created",
+                f"A new risk was added to project '{risk.project.name}'."
+            )
 
     # ✅ Risk Updated Notification
     def perform_update(self, serializer):
@@ -51,7 +90,17 @@ class RiskViewSet(viewsets.ModelViewSet):
             f"A risk in project '{risk.project.name}' was updated."
         )
 
-    # ✅ Risk Deleted Notification
+    # ✅ TM cannot delete risks
+    def destroy(self, request, *args, **kwargs):
+        role = getattr(request.user, "role", None)
+        if role != "PM":
+            return Response(
+                {"detail": "Team Members cannot delete risks."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    # ✅ Risk Deleted Notification (PM only)
     def perform_destroy(self, instance):
         project_name = instance.project.name
         instance.delete()
@@ -61,6 +110,70 @@ class RiskViewSet(viewsets.ModelViewSet):
             "Risk Deleted",
             f"A risk was removed from project '{project_name}'."
         )
+
+    # =========================
+    # PM Approval Actions
+    # =========================
+
+    @action(detail=True, methods=["patch"], url_path="approve")
+    def approve(self, request, pk=None):
+        risk = self.get_object()
+        user = request.user
+
+        if getattr(user, "role", None) != "PM":
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        # PM can only approve risks inside their projects
+        if risk.project.created_by != user:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        risk.approval_status = "approved"
+        risk.save(update_fields=["approval_status"])
+
+        # notify TM creator
+        if risk.created_by:
+            create_notification(
+                risk.created_by,
+                "Risk Approved",
+                f"Your risk '{risk.title}' was approved by the Project Manager."
+            )
+
+        create_notification(
+            user,
+            "Risk Approved",
+            f"You approved risk '{risk.title}' in '{risk.project.name}'."
+        )
+
+        return Response({"message": "Risk approved."}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["patch"], url_path="reject")
+    def reject(self, request, pk=None):
+        risk = self.get_object()
+        user = request.user
+
+        if getattr(user, "role", None) != "PM":
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        if risk.project.created_by != user:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        risk.approval_status = "rejected"
+        risk.save(update_fields=["approval_status"])
+
+        if risk.created_by:
+            create_notification(
+                risk.created_by,
+                "Risk Rejected",
+                f"Your risk '{risk.title}' was rejected by the Project Manager."
+            )
+
+        create_notification(
+            user,
+            "Risk Rejected",
+            f"You rejected risk '{risk.title}' in '{risk.project.name}'."
+        )
+
+        return Response({"message": "Risk rejected."}, status=status.HTTP_200_OK)
 
 
 class RiskMitigationUpdateView(APIView):
@@ -76,18 +189,25 @@ class RiskMitigationUpdateView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        serializer = RiskMitigationUpdateSerializer(
-            risk, data=request.data, partial=True
-        )
+        serializer = RiskMitigationUpdateSerializer(risk, data=request.data, partial=True)
 
         if serializer.is_valid():
             serializer.save()
 
-            # ✅ Mitigation Updated Notification (PM side)
+            # ✅ Notify PM who owns the project
+            pm_user = risk.project.created_by
+            if pm_user and pm_user != user:
+                create_notification(
+                    pm_user,
+                    "Mitigation Updated",
+                    f"Mitigation updated for risk '{risk.title}' in '{risk.project.name}'."
+                )
+
+            # ✅ Also notify actor (optional)
             create_notification(
-                request.user,
-                "Risk Mitigation Updated",
-                f"Mitigation was updated for a risk in '{risk.project.name}'."
+                user,
+                "Mitigation Saved",
+                f"Mitigation saved for risk '{risk.title}'."
             )
 
             return Response(serializer.data)
@@ -103,13 +223,9 @@ class GlobalRiskListView(generics.ListAPIView):
         user = self.request.user
         queryset = Risk.objects.select_related("project", "assigned_to")
 
-        # 🔹 Permission logic
         if not user.is_staff:
-            queryset = queryset.filter(
-                Q(created_by=user) | Q(assigned_to=user)
-            )
+            queryset = queryset.filter(Q(created_by=user) | Q(assigned_to=user))
 
-        # 🔹 Manual filters
         risk_level = self.request.query_params.get("risk_level")
         status_param = self.request.query_params.get("status")
         mitigation_status = self.request.query_params.get("mitigation_status")
@@ -124,3 +240,21 @@ class GlobalRiskListView(generics.ListAPIView):
             queryset = queryset.filter(mitigation_status=mitigation_status)
 
         return queryset.order_by("-created_at")
+
+
+class MyRisksView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = RiskSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Risk.objects.select_related("project", "assigned_to", "created_by")
+
+        # TM: assigned OR created by them
+        qs = qs.filter(Q(assigned_to=user) | Q(created_by=user)).order_by("-created_at")
+
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+
+        return qs

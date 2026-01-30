@@ -5,6 +5,18 @@ from projects.models import Project
 
 class Risk(models.Model):
 
+    APPROVAL_CHOICES = [
+    ("pending", "Pending"),
+    ("approved", "Approved"),
+    ("rejected", "Rejected"),
+]
+
+    approval_status = models.CharField(
+    max_length=20,
+    choices=APPROVAL_CHOICES,
+    default="approved",  # PM-created risks should be approved automatically
+)
+
     RISK_DECISION_CHOICES = [
         ("Avoid", "Avoid"),
         ("Mitigate", "Mitigate"),
