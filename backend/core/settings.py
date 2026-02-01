@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'notifications',  # Notification app
     'dashboardpm', # Dashboard for Project Manager
     'reports',  # Reporting app
+    'maintenance',  # Maintenance app
 ]
 
 MIDDLEWARE = [
