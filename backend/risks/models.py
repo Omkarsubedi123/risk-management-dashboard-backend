@@ -1,6 +1,8 @@
 from django.db import models
 from users.models import CustomUser
 from projects.models import Project
+from django.utils import timezone
+from datetime import timedelta
 
 
 class Risk(models.Model):
@@ -16,6 +18,18 @@ class Risk(models.Model):
     choices=APPROVAL_CHOICES,
     default="approved",  # PM-created risks should be approved automatically
 )
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def is_in_trash(self):
+        return self.approval_status == "rejected"
+
+    @property
+    def auto_delete_at(self):
+        if self.rejected_at:
+            return self.rejected_at + timedelta(days=15)
+        return None
 
     RISK_DECISION_CHOICES = [
         ("Avoid", "Avoid"),

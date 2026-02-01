@@ -1,9 +1,11 @@
+from time import timezone
 from rest_framework import viewsets, permissions, status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
+from urllib3 import request
 
 from notifications.utils import create_notification
 from .models import Risk
@@ -20,26 +22,41 @@ class RiskViewSet(viewsets.ModelViewSet):
 
         role = getattr(user, "role", None)
 
-        # ✅ PM: must see risks in projects they own (NOT only created_by=user)
-        # This allows PM to see TM-submitted risks too.
+        # 🚨 IMPORTANT: hide rejected risks from normal APIs
+        qs = qs.exclude(approval_status="rejected")
+
         if role == "PM":
             qs = qs.filter(project__created_by=user)
-
-        # ✅ TM: see assigned risks + risks they created
         else:
             qs = qs.filter(Q(assigned_to=user) | Q(created_by=user))
 
-        # optional filter: by project
         project_id = self.request.query_params.get("project")
         if project_id:
             qs = qs.filter(project_id=project_id)
 
-        # optional filter: approval_status (used for PM approvals page later)
         approval_status_param = self.request.query_params.get("approval_status")
         if approval_status_param:
             qs = qs.filter(approval_status=approval_status_param)
 
         return qs.order_by("-created_at")
+    
+    @action(detail=False, methods=["get"], url_path="trash")
+    def trash(self, request):
+        user = request.user
+        qs = Risk.objects.filter(approval_status="rejected")
+
+        role = getattr(user, "role", None)
+        if role == "PM":
+            qs = qs.filter(project__created_by=user)
+        else:
+            qs = qs.filter(Q(created_by=user) | Q(assigned_to=user))
+
+        project_id = request.query_params.get("project")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+
+        return Response(RiskSerializer(qs.order_by("-rejected_at"), many=True).data)
+
 
     # ✅ Risk Created Notification + approval workflow
     def perform_create(self, serializer):
@@ -128,7 +145,8 @@ class RiskViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
 
         risk.approval_status = "approved"
-        risk.save(update_fields=["approval_status"])
+        risk.approved_at = timezone.now()
+        risk.save(update_fields=["approval_status", "approved_at"])
 
         # notify TM creator
         if risk.created_by:
@@ -158,7 +176,8 @@ class RiskViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
 
         risk.approval_status = "rejected"
-        risk.save(update_fields=["approval_status"])
+        risk.rejected_at = timezone.now()
+        risk.save(update_fields=["approval_status", "rejected_at"])
 
         if risk.created_by:
             create_notification(
@@ -258,3 +277,4 @@ class MyRisksView(generics.ListAPIView):
             qs = qs.filter(project_id=project_id)
 
         return qs
+
