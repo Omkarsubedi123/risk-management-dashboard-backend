@@ -5,11 +5,9 @@ from .models import Risk
 class RiskSerializer(serializers.ModelSerializer):
     created_by = serializers.ReadOnlyField(source="created_by.id")
 
-    # ✅ required fields you already use
     project_name = serializers.CharField(source="project.name", read_only=True)
     project_id = serializers.IntegerField(source="project.id", read_only=True)
 
-    # ✅ helpful for TM/PM screens (safe additions)
     assigned_to_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
 
