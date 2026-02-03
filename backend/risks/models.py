@@ -7,6 +7,26 @@ from datetime import timedelta
 
 class Risk(models.Model):
 
+    # TM Mitigation Suggestion 
+
+    tm_mitigation_suggestion = models.TextField(
+        blank=True,
+        help_text="Mitigation suggestion proposed by Team Member"
+    )
+
+    TM_SUGGESTION_STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+    ]
+
+    tm_suggestion_status = models.CharField(
+        max_length=20,
+        choices=TM_SUGGESTION_STATUS_CHOICES,
+        default="pending"
+    )
+
+
     APPROVAL_CHOICES = [
     ("pending", "Pending"),
     ("approved", "Approved"),
