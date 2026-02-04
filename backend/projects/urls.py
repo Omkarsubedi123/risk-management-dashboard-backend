@@ -8,6 +8,7 @@ from .views import (
     InviteCreateView,
     InviteAcceptView,
     MyProjectsView,
+    ProjectTeamListView,
 )
 
 urlpatterns = [
@@ -18,4 +19,6 @@ urlpatterns = [
     path("<int:pk>/invite/", InviteCreateView.as_view(), name="project-invite"),
     path("invite/accept/", InviteAcceptView.as_view(), name="invite-accept"),
     path("my/", MyProjectsView.as_view(), name="my-projects"),
+    path("<int:pk>/team/", ProjectTeamListView.as_view(), name="project-team"),
+
 ]

@@ -456,9 +456,21 @@ class GlobalRiskListView(generics.ListAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Risk.objects.select_related("project", "assigned_to")
+        role = getattr(user, "role", None)
 
-        if not user.is_staff:
+        queryset = Risk.objects.select_related("project", "assigned_to", "created_by")
+
+        #  Always hide rejected from global
+        queryset = queryset.exclude(approval_status="rejected")
+
+        #  Only show approved items in Global Risk Register
+        queryset = queryset.filter(approval_status="approved")
+
+        #  PM should see ALL approved risks inside their projects (including TM created)
+        if role == "PM":
+            queryset = queryset.filter(project__created_by=user)
+        else:
+            #  TM (and others) see only what they created or assigned
             queryset = queryset.filter(Q(created_by=user) | Q(assigned_to=user))
 
         risk_level = self.request.query_params.get("risk_level")
@@ -477,6 +489,7 @@ class GlobalRiskListView(generics.ListAPIView):
         return queryset.order_by("-created_at")
 
 
+
 class MyRisksView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = RiskSerializer
@@ -487,7 +500,6 @@ class MyRisksView(generics.ListAPIView):
         qs = qs.filter(Q(assigned_to=user) | Q(created_by=user)).order_by("-created_at")
 
         project_id = self.request.query_params.get("project")
-        if project_id:
-            qs = qs.filter(project_id=project_id)
-
+        if project_id and str(project_id).isdigit():
+            qs = qs.filter(project_id=int(project_id))
         return qs

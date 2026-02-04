@@ -5,7 +5,6 @@ from .models import Project, ProjectTeam, Invite
 
 User = get_user_model()
 
-
 class ProjectTeamSerializer(serializers.ModelSerializer):
     email = serializers.SerializerMethodField()
     username = serializers.SerializerMethodField()
@@ -33,15 +32,24 @@ class ProjectTeamSerializer(serializers.ModelSerializer):
 class ProjectSerializer(serializers.ModelSerializer):
     team = ProjectTeamSerializer(source="team.all", many=True, read_only=True)
     created_by_email = serializers.SerializerMethodField()
+    pm_email = serializers.SerializerMethodField()
+    team_count = serializers.SerializerMethodField()
 
     class Meta:
-        
         model = Project
         fields = "__all__"
         read_only_fields = ("created_by", "created_at", "updated_at")
 
     def get_created_by_email(self, obj):
-        return obj.created_by.email
+        return obj.created_by.email if obj.created_by else ""
+
+    def get_pm_email(self, obj):
+        # PM in your system is created_by
+        return obj.created_by.email if obj.created_by else ""
+
+    def get_team_count(self, obj):
+        return obj.team.count()
+
 
 
 class InviteSerializer(serializers.ModelSerializer):

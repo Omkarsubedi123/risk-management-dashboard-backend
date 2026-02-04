@@ -16,6 +16,8 @@ from .serializers import (
     ProjectTeamSerializer,
 )
 from .permissions import IsProjectPMOrReadOnly, IsProjectPM
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
 
 User = get_user_model()
 
@@ -165,37 +167,37 @@ class InviteCreateView(generics.GenericAPIView):
             role=role,
         )   
 
-        # ✅ AUTO-ACCEPT IF USER EXISTS
+        #  AUTO-ACCEPT IF USER EXISTS
+        #  AUTO-ACCEPT IF USER EXISTS
         # ✅ AUTO-ACCEPT IF USER EXISTS
         if invited_user:
             ProjectTeam.objects.update_or_create(
-            project=project,
-            user=invited_user,
-            defaults={"role": ProjectTeam.ROLE_TM},
-        )
+                project=project,
+                user=invited_user,
+                defaults={"role": ProjectTeam.ROLE_TM},
+            )
 
-        invite.accepted = True
-        invite.accepted_at = timezone.now()
-        invite.save(update_fields=["accepted", "accepted_at"])
+            invite.accepted = True
+            invite.accepted_at = timezone.now()
+            invite.save(update_fields=["accepted", "accepted_at", "invited_user"])
 
-        # ✅ Notification for invited user (TM)
-        create_notification(
-            invited_user,
-            "Added to Project",
-            f"You were added to the project '{project.name}'."
-        )
+            create_notification(
+                invited_user,
+                "Added to Project",
+                f"You were added to the project '{project.name}'."
+            )
 
-        # ✅ Notification for PM (who invited) — THIS IS THE MISSING PART
-        create_notification(
-            request.user,
-            "Member Added",
-            f"{invited_user.email} was added to '{project.name}'."
-        )
+            create_notification(
+                request.user,
+                "Member Added",
+                f"{invited_user.email} was added to '{project.name}'."
+            )
 
-        return Response(
-            {"detail": "User added to project."},
-            status=status.HTTP_201_CREATED,
-        )
+            return Response(
+                {"detail": "User added to project."},
+                status=status.HTTP_201_CREATED,
+            )
+
 
 
         # 📧 Email invite for non-registered users
@@ -291,3 +293,44 @@ class MyProjectsView(generics.ListAPIView):
 
         # TM: projects where they are in ProjectTeam (team related_name)
         return Project.objects.filter(team__user=user).distinct().order_by("-updated_at")
+
+
+
+class ProjectTeamListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+
+        #  Only PM (created_by) OR project members can view
+        is_member = ProjectTeam.objects.filter(project=project, user=request.user).exists()
+        is_pm = (project.created_by == request.user)
+
+        if not (is_member or is_pm):
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        #  Real joined members
+        team_qs = (
+            ProjectTeam.objects.filter(project=project)
+            .select_related("user")
+            .order_by("role", "invited_at")
+        )
+        data = ProjectTeamSerializer(team_qs, many=True).data
+
+        #  Pending invites = accepted=False (because your model uses accepted boolean)
+        pending_invites = Invite.objects.filter(project=project, accepted=False).order_by("-created_at")
+
+        # Add invite entries so frontend can show "Invited"
+        for inv in pending_invites:
+            data.append({
+                "id": f"invite-{inv.id}",
+                "user_id": None,
+                "email": inv.email,
+                "username": inv.email,
+                "full_name": "",
+                "role": inv.role or "TM",
+                "invited_at": inv.created_at,
+                "is_invited": True,
+            })
+
+        return Response(data, status=status.HTTP_200_OK)
