@@ -8,7 +8,11 @@ from django.db.models import Q
 
 from notifications.utils import create_notification
 from .models import Risk
-from .serializers import RiskSerializer, RiskMitigationUpdateSerializer
+from .serializers import (
+    RiskSerializer,
+    RiskMitigationUpdateSerializer,
+    RiskTMStatusUpdateSerializer,
+)
 
 
 class RiskViewSet(viewsets.ModelViewSet):
@@ -20,14 +24,14 @@ class RiskViewSet(viewsets.ModelViewSet):
         qs = Risk.objects.select_related("project", "assigned_to", "created_by")
         role = getattr(user, "role", None)
 
-        # ✅ Hide rejected risks from normal APIs
+        # Hide rejected risks from normal APIs
         qs = qs.exclude(approval_status="rejected")
 
-        # ✅ PM sees all risks inside their projects (including TM created)
+        # PM sees all risks inside their projects (including TM created)
         if role == "PM":
             qs = qs.filter(project__created_by=user)
         else:
-            # ✅ TM sees assigned + created
+            # TM sees assigned + created
             qs = qs.filter(Q(assigned_to=user) | Q(created_by=user))
 
         project_id = self.request.query_params.get("project")
@@ -57,12 +61,18 @@ class RiskViewSet(viewsets.ModelViewSet):
 
         return Response(RiskSerializer(qs.order_by("-rejected_at"), many=True).data)
 
-    # ✅ Risk Created Notification + approval workflow
+    # Risk Created Notification + approval workflow
     def perform_create(self, serializer):
         user = self.request.user
         role = getattr(user, "role", None)
 
         risk = serializer.save(created_by=user)
+
+        # PERMANENT DEFAULT:
+        # If TM creates a risk and frontend didn't choose assignee, assign to TM.
+        if role == "TM" and risk.assigned_to is None:
+            risk.assigned_to = user
+            risk.save(update_fields=["assigned_to"])
 
         if role == "TM":
             risk.approval_status = "pending"
@@ -91,7 +101,7 @@ class RiskViewSet(viewsets.ModelViewSet):
                 f"A new risk was added to project '{risk.project.name}'."
             )
 
-    # ✅ Risk Updated Notification
+    # Risk Updated Notification
     def perform_update(self, serializer):
         risk = serializer.save()
 
@@ -101,7 +111,7 @@ class RiskViewSet(viewsets.ModelViewSet):
             f"A risk in project '{risk.project.name}' was updated."
         )
 
-    # ✅ TM cannot delete risks
+    # TM cannot delete risks
     def destroy(self, request, *args, **kwargs):
         role = getattr(request.user, "role", None)
         if role != "PM":
@@ -111,7 +121,7 @@ class RiskViewSet(viewsets.ModelViewSet):
             )
         return super().destroy(request, *args, **kwargs)
 
-    # ✅ Risk Deleted Notification (PM only)
+    # Risk Deleted Notification (PM only)
     def perform_destroy(self, instance):
         project_name = instance.project.name
         instance.delete()
@@ -192,8 +202,60 @@ class RiskViewSet(viewsets.ModelViewSet):
         return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
 
     # ==========================================================
-    # ✅ TM → Suggest Mitigation (does NOT overwrite PM plan)
-    # URL: PATCH /api/risks/<id>/suggest-mitigation/
+    # TM -> Update Risk STATUS (NEW)
+    # ==========================================================
+    @action(detail=True, methods=["patch"], url_path="tm-status")
+    def tm_status(self, request, pk=None):
+        """
+        TM should be able to set: Open / InProgress / Closed
+        Visible in PM dashboard because it's same Risk object.
+        Also sends notifications.
+        """
+        risk = self.get_object()
+        user = request.user
+
+        if getattr(user, "role", None) != "TM":
+            return Response({"detail": "Only Team Members can update risk status."},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        if user != risk.created_by and user != risk.assigned_to:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        if (risk.approval_status or "").lower() != "approved":
+            return Response(
+                {"detail": "You can update status only after risk is approved."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = RiskTMStatusUpdateSerializer(risk, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        old_status = risk.status
+        serializer.save()
+        new_status = risk.status
+
+        pm_user = risk.project.created_by
+
+        # Notify PM (if someone else updated)
+        if pm_user and pm_user != user and old_status != new_status:
+            create_notification(
+                pm_user,
+                "Risk Status Updated",
+                f"TM updated risk '{risk.title}' status: {old_status} → {new_status} (Project: {risk.project.name})."
+            )
+
+        # Notify TM
+        if old_status != new_status:
+            create_notification(
+                user,
+                "Status Saved",
+                f"Risk '{risk.title}' status updated: {old_status} → {new_status}."
+            )
+
+        return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
+
+    # ==========================================================
+    # TM -> Suggest Mitigation (unchanged)
     # ==========================================================
     @action(detail=True, methods=["patch"], url_path="suggest-mitigation")
     def suggest_mitigation(self, request, pk=None):
@@ -215,7 +277,6 @@ class RiskViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # ✅ Accept multiple possible frontend keys safely (prevents “Suggestion is required” bug)
         possible_keys = [
             "suggestion",
             "mitigation_suggestion",
@@ -278,8 +339,7 @@ class RiskViewSet(viewsets.ModelViewSet):
         return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
 
     # ==========================================================
-    # ✅ PM → Approve & Apply Suggestion
-    # URL: PATCH /api/risks/<id>/approve-suggestion/
+    # PM -> Approve & Apply Suggestion (unchanged)
     # ==========================================================
     @action(detail=True, methods=["patch"], url_path="approve-suggestion")
     def approve_suggestion(self, request, pk=None):
@@ -301,7 +361,6 @@ class RiskViewSet(viewsets.ModelViewSet):
         if (risk.tm_suggestion_status or "").lower() != "pending":
             return Response({"detail": "No pending suggestion to approve."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # ✅ Apply suggestion to PM plan
         risk.mitigation_plan = risk.tm_mitigation_suggestion
 
         new_status = request.data.get("mitigation_status")
@@ -342,8 +401,7 @@ class RiskViewSet(viewsets.ModelViewSet):
         return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
 
     # ==========================================================
-    # ✅ PM → Reject Suggestion
-    # URL: PATCH /api/risks/<id>/reject-suggestion/
+    # PM -> Reject Suggestion (unchanged)
     # ==========================================================
     @action(detail=True, methods=["patch"], url_path="reject-suggestion")
     def reject_suggestion(self, request, pk=None):
@@ -401,7 +459,7 @@ class RiskMitigationUpdateView(APIView):
 
     def patch(self, request, pk):
         """
-        ✅ NEW RULE (no collisions):
+        NEW RULE (no collisions):
         - PM (project owner) can update mitigation_plan + mitigation_status
         - TM can update ONLY mitigation_status (progress), NOT the plan
         """
@@ -430,13 +488,16 @@ class RiskMitigationUpdateView(APIView):
         serializer = RiskMitigationUpdateSerializer(risk, data=allowed_data, partial=True)
 
         if serializer.is_valid():
+            before = risk.mitigation_status
             serializer.save()
+            after = risk.mitigation_status
 
-            if pm_user and pm_user != user:
+            # Notify PM if TM changed it
+            if pm_user and pm_user != user and before != after:
                 create_notification(
                     pm_user,
                     "Mitigation Updated",
-                    f"Mitigation progress updated for risk '{risk.title}' in '{risk.project.name}'."
+                    f"Mitigation progress updated for risk '{risk.title}' in '{risk.project.name}': {before} → {after}."
                 )
 
             create_notification(
@@ -460,17 +521,17 @@ class GlobalRiskListView(generics.ListAPIView):
 
         queryset = Risk.objects.select_related("project", "assigned_to", "created_by")
 
-        #  Always hide rejected from global
+        # Always hide rejected from global
         queryset = queryset.exclude(approval_status="rejected")
 
-        #  Only show approved items in Global Risk Register
+        # Only show approved items in Global Risk Register
         queryset = queryset.filter(approval_status="approved")
 
-        #  PM should see ALL approved risks inside their projects (including TM created)
+        # PM should see ALL approved risks inside their projects (including TM created)
         if role == "PM":
             queryset = queryset.filter(project__created_by=user)
         else:
-            #  TM (and others) see only what they created or assigned
+            # TM (and others) see only what they created or assigned
             queryset = queryset.filter(Q(created_by=user) | Q(assigned_to=user))
 
         risk_level = self.request.query_params.get("risk_level")
@@ -487,7 +548,6 @@ class GlobalRiskListView(generics.ListAPIView):
             queryset = queryset.filter(mitigation_status=mitigation_status)
 
         return queryset.order_by("-created_at")
-
 
 
 class MyRisksView(generics.ListAPIView):

@@ -1,5 +1,8 @@
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from .models import Risk
+
+User = get_user_model()
 
 
 class RiskSerializer(serializers.ModelSerializer):
@@ -10,6 +13,13 @@ class RiskSerializer(serializers.ModelSerializer):
 
     assigned_to_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
+
+    # assignment must be writable
+    assigned_to = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        allow_null=True,
+        required=False
+    )
 
     class Meta:
         model = Risk
@@ -38,3 +48,12 @@ class RiskMitigationUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Risk
         fields = ("mitigation_plan", "mitigation_status")
+
+
+class RiskTMStatusUpdateSerializer(serializers.ModelSerializer):
+    """
+    TM can update only risk.status (Open/InProgress/Closed)
+    """
+    class Meta:
+        model = Risk
+        fields = ("status",)
