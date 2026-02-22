@@ -11,10 +11,14 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from datetime import timedelta
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
 
 # Quick-start development settings - unsuitable for production
@@ -49,6 +53,7 @@ INSTALLED_APPS = [
     'dashboardpm', # Dashboard for Project Manager
     'reports',  # Reporting app
     'maintenance',  # Maintenance app
+    'chat',  # Chat app for communication
 ]
 
 MIDDLEWARE = [
