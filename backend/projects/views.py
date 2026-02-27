@@ -1,4 +1,3 @@
-
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
@@ -6,8 +5,13 @@ from django.utils import timezone
 from django.conf import settings
 from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
-from notifications.utils import create_notification
 
+from notifications.utils import (
+    create_notification,
+    url_project_for,
+    url_projects_home_for,
+    url_manage_team,
+)
 
 from .models import Project, ProjectTeam, Invite
 from .serializers import (
@@ -49,7 +53,8 @@ class ProjectListCreateView(generics.ListCreateAPIView):
         create_notification(
             self.request.user,
             "Project Created",
-            f"Project '{project.name}' was created successfully."
+            f"Project '{project.name}' was created successfully.",
+            redirect_url=url_project_for(self.request.user, project.id),
         )
 
 
@@ -66,16 +71,18 @@ class ProjectDetailView(generics.RetrieveUpdateDestroyAPIView):
         create_notification(
             self.request.user,
             "Project Updated",
-            f"Project '{project.name}' was updated."
+            f"Project '{project.name}' was updated.",
+            redirect_url=url_project_for(self.request.user, project.id),
         )
-    
+
     def perform_destroy(self, instance):
         project_name = instance.name
         instance.delete()
         create_notification(
             self.request.user,
             "Project Deleted",
-            f"Project '{project_name}' was deleted."
+            f"Project '{project_name}' was deleted.",
+            redirect_url=url_projects_home_for(self.request.user),
         )
 
 
@@ -104,28 +111,31 @@ class RemoveMemberView(generics.DestroyAPIView):
             raise PermissionDenied("Cannot remove the Project Manager from the project.")
 
         removed_user = instance.user
-        project_name = instance.project.name
-        
+        project = instance.project
+        project_name = project.name
+
         Invite.objects.filter(
-            project=instance.project,
-            email__iexact=removed_user.email
+            project=project,
+            email__iexact=removed_user.email,
         ).delete()
 
-
+        # Removed user is typically TM -> send them to their projects list
         create_notification(
             removed_user,
             "Removed from Project",
-            f"You were removed from the project '{project_name}'."
-            )
-        
+            f"You were removed from the project '{project_name}'.",
+            redirect_url=url_projects_home_for(removed_user),
+        )
 
+        # PM -> send to manage team page
         create_notification(
             self.request.user,
             "Member Removed",
-            f"You removed {removed_user.email} from '{project_name}'."
-            )
-        instance.delete()
+            f"You removed {removed_user.email} from '{project_name}'.",
+            redirect_url=url_manage_team(project.id),
+        )
 
+        instance.delete()
 
 
 class InviteCreateView(generics.GenericAPIView):
@@ -142,18 +152,18 @@ class InviteCreateView(generics.GenericAPIView):
         if not email:
             return Response({"detail": "Email is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # ✅ membership check first (truth)
+        # membership check first (truth)
         if ProjectTeam.objects.filter(project=project, user__email__iexact=email).exists():
             return Response({"detail": "User is already a member of this project."}, status=status.HTTP_200_OK)
+
         invited_user = User.objects.filter(email__iexact=email).first()
-        
         existing_invite = Invite.objects.filter(project=project, email__iexact=email).first()
 
-        # ✅ pending invite blocks
+        # pending invite blocks
         if existing_invite and not existing_invite.accepted:
             return Response({"detail": "Invitation already sent."}, status=status.HTTP_200_OK)
 
-        # ✅ stale accepted invite cleanup (user was removed earlier)
+        # stale accepted invite cleanup (user was removed earlier)
         if existing_invite and existing_invite.accepted:
             existing_invite.delete()
             existing_invite = None
@@ -165,11 +175,9 @@ class InviteCreateView(generics.GenericAPIView):
             invited_by=request.user,
             invited_user=invited_user,
             role=role,
-        )   
+        )
 
-        #  AUTO-ACCEPT IF USER EXISTS
-        #  AUTO-ACCEPT IF USER EXISTS
-        # ✅ AUTO-ACCEPT IF USER EXISTS
+        # AUTO-ACCEPT IF USER EXISTS
         if invited_user:
             ProjectTeam.objects.update_or_create(
                 project=project,
@@ -184,23 +192,20 @@ class InviteCreateView(generics.GenericAPIView):
             create_notification(
                 invited_user,
                 "Added to Project",
-                f"You were added to the project '{project.name}'."
+                f"You were added to the project '{project.name}'.",
+                redirect_url=url_projects_home_for(invited_user),
             )
 
             create_notification(
                 request.user,
                 "Member Added",
-                f"{invited_user.email} was added to '{project.name}'."
+                f"{invited_user.email} was added to '{project.name}'.",
+                redirect_url=url_manage_team(project.id),
             )
 
-            return Response(
-                {"detail": "User added to project."},
-                status=status.HTTP_201_CREATED,
-            )
+            return Response({"detail": "User added to project."}, status=status.HTTP_201_CREATED)
 
-
-
-        # 📧 Email invite for non-registered users
+        # Email invite for non-registered users
         invite_link = f"{settings.FRONTEND_URL}/accept-invite?token={invite.token}"
 
         send_mail(
@@ -219,13 +224,11 @@ class InviteCreateView(generics.GenericAPIView):
         create_notification(
             request.user,
             "Invitation Sent",
-            f"Invitation sent to {email} for project '{project.name}'."
+            f"Invitation sent to {email} for project '{project.name}'.",
+            redirect_url=url_manage_team(project.id),
         )
 
-        return Response(
-            {"detail": "Invitation email sent."},
-            status=status.HTTP_201_CREATED,
-        )
+        return Response({"detail": "Invitation email sent."}, status=status.HTTP_201_CREATED)
 
 
 class InviteAcceptView(generics.GenericAPIView):
@@ -235,10 +238,7 @@ class InviteAcceptView(generics.GenericAPIView):
         token = request.data.get("token")
 
         if not token:
-            return Response(
-                {"detail": "Token is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": "Token is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         invite = get_object_or_404(
             Invite,
@@ -247,10 +247,7 @@ class InviteAcceptView(generics.GenericAPIView):
         )
 
         if request.user.email.lower() != invite.email.lower():
-            return Response(
-                {"detail": "This invite is for a different email."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"detail": "This invite is for a different email."}, status=status.HTTP_403_FORBIDDEN)
 
         ProjectTeam.objects.get_or_create(
             project=invite.project,
@@ -263,21 +260,31 @@ class InviteAcceptView(generics.GenericAPIView):
         invite.accepted_at = timezone.now()
         invite.save()
 
+        # PM -> manage team page
         create_notification(
             invite.project.created_by,
             "Invitation Accepted",
-            f"{request.user.get_full_name() or request.user.email} joined "
-            f"'{invite.project.name}'."
+            f"{request.user.get_full_name() or request.user.email} joined '{invite.project.name}'.",
+            redirect_url=url_manage_team(invite.project.id),
         )
 
-        return Response(
-            {"detail": "Invitation accepted successfully."},
-            status=status.HTTP_200_OK,
+        # TM -> their projects list
+        create_notification(
+            request.user,
+            "Invitation Accepted",
+            f"You joined '{invite.project.name}'.",
+            redirect_url=url_projects_home_for(request.user),
         )
 
+        return Response({"detail": "Invitation accepted successfully."}, status=status.HTTP_200_OK)
 
-# Team Members 
+
+# =========================
+# Team Members / TM Projects
+# =========================
+
 from .serializers import ProjectSummarySerializer
+
 
 class MyProjectsView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -295,21 +302,20 @@ class MyProjectsView(generics.ListAPIView):
         return Project.objects.filter(team__user=user).distinct().order_by("-updated_at")
 
 
-
 class ProjectTeamListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
         project = get_object_or_404(Project, pk=pk)
 
-        #  Only PM (created_by) OR project members can view
+        # Only PM (created_by) OR project members can view
         is_member = ProjectTeam.objects.filter(project=project, user=request.user).exists()
         is_pm = (project.created_by == request.user)
 
         if not (is_member or is_pm):
             return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
 
-        #  Real joined members
+        # Real joined members
         team_qs = (
             ProjectTeam.objects.filter(project=project)
             .select_related("user")
@@ -317,7 +323,7 @@ class ProjectTeamListView(APIView):
         )
         data = ProjectTeamSerializer(team_qs, many=True).data
 
-        #  Pending invites = accepted=False (because your model uses accepted boolean)
+        # Pending invites = accepted=False
         pending_invites = Invite.objects.filter(project=project, accepted=False).order_by("-created_at")
 
         # Add invite entries so frontend can show "Invited"

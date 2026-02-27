@@ -1,8 +1,9 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
+from rest_framework.views import APIView
+
 from .models import Notification
 from .serializers import NotificationSerializer
-from rest_framework.views import APIView
 
 
 class NotificationListView(generics.ListAPIView):
@@ -32,23 +33,33 @@ class MarkNotificationReadView(generics.UpdateAPIView):
 
         if not notification.is_read:
             notification.is_read = True
-            notification.save()
+            notification.save(update_fields=["is_read"])
 
         return Response(
             {"detail": "Notification marked as read."},
             status=status.HTTP_200_OK,
         )
 
+
 class MarkAllReadView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
-        return Response({"detail": "All notifications marked as read."}, status=status.HTTP_200_OK)
+        Notification.objects.filter(
+            user=request.user, is_read=False
+        ).update(is_read=True)
+        return Response(
+            {"detail": "All notifications marked as read."},
+            status=status.HTTP_200_OK
+        )
+
 
 class ClearAllNotificationsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def delete(self, request):
         Notification.objects.filter(user=request.user).delete()
-        return Response({"detail": "All notifications cleared."}, status=status.HTTP_200_OK)
+        return Response(
+            {"detail": "All notifications cleared."},
+            status=status.HTTP_200_OK
+        )

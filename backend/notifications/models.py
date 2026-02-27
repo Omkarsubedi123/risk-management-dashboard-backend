@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 
+
 class Notification(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -10,6 +11,9 @@ class Notification(models.Model):
     title = models.CharField(max_length=255)
     message = models.TextField()
     is_read = models.BooleanField(default=False)
+
+    redirect_url = models.CharField(max_length=500, blank=True, default="")
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

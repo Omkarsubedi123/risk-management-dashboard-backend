@@ -128,7 +128,7 @@ class RiskMessageListCreateView(generics.GenericAPIView):
         )
 
 
-# ✅ NEW: Edit message (only author can edit)
+#  NEW: Edit message (only author can edit)
 class RiskMessageEditView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -165,7 +165,7 @@ class RiskMessageEditView(APIView):
         return Response(RiskMessageSerializer(msg, context={"request": request}).data, status=status.HTTP_200_OK)
 
 
-# ✅ NEW: Participants list for @mention suggestions (real project members)
+#  NEW: Participants list for @mention suggestions (real project members)
 class RiskChatParticipantsView(APIView):
     permission_classes = [IsAuthenticated]
 

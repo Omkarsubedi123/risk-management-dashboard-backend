@@ -6,7 +6,7 @@ from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 
-from notifications.utils import create_notification
+from notifications.utils import create_notification, url_risk_for
 from .models import Risk
 from .serializers import (
     RiskSerializer,
@@ -80,25 +80,31 @@ class RiskViewSet(viewsets.ModelViewSet):
 
             pm_user = risk.project.created_by
 
+            # ✅ PM should open PM risk page
             create_notification(
                 pm_user,
                 "New Risk Submitted",
-                f"TM submitted risk '{risk.title}' in project '{risk.project.name}'."
+                f"TM submitted risk '{risk.title}' in project '{risk.project.name}'.",
+                redirect_url=url_risk_for(pm_user, risk.id),
             )
 
+            # ✅ TM should open TM risk page
             create_notification(
                 user,
                 "Risk Submitted",
-                f"Your risk '{risk.title}' was submitted for PM approval."
+                f"Your risk '{risk.title}' was submitted for PM approval.",
+                redirect_url=url_risk_for(user, risk.id),
             )
         else:
             risk.approval_status = "approved"
             risk.save(update_fields=["approval_status"])
 
+            # ✅ PM created -> open PM risk page
             create_notification(
                 user,
                 "Risk Created",
-                f"A new risk was added to project '{risk.project.name}'."
+                f"A new risk was added to project '{risk.project.name}'.",
+                redirect_url=url_risk_for(user, risk.id),
             )
 
     # Risk Updated Notification
@@ -108,7 +114,8 @@ class RiskViewSet(viewsets.ModelViewSet):
         create_notification(
             self.request.user,
             "Risk Updated",
-            f"A risk in project '{risk.project.name}' was updated."
+            f"A risk in project '{risk.project.name}' was updated.",
+            redirect_url=url_risk_for(self.request.user, risk.id),
         )
 
     # TM cannot delete risks
@@ -117,19 +124,21 @@ class RiskViewSet(viewsets.ModelViewSet):
         if role != "PM":
             return Response(
                 {"detail": "Team Members cannot delete risks."},
-                status=status.HTTP_403_FORBIDDEN
+                status=status.HTTP_403_FORBIDDEN,
             )
         return super().destroy(request, *args, **kwargs)
 
     # Risk Deleted Notification (PM only)
     def perform_destroy(self, instance):
         project_name = instance.project.name
+        rid = instance.id
         instance.delete()
 
         create_notification(
             self.request.user,
             "Risk Deleted",
-            f"A risk was removed from project '{project_name}'."
+            f"A risk was removed from project '{project_name}'.",
+            redirect_url="/risks",  # list page
         )
 
     # =========================
@@ -153,17 +162,21 @@ class RiskViewSet(viewsets.ModelViewSet):
         else:
             risk.save(update_fields=["approval_status"])
 
+        # ✅ TM/creator should open TM route if they are TM
         if risk.created_by:
             create_notification(
                 risk.created_by,
                 "Risk Approved",
-                f"Your risk '{risk.title}' was approved by the Project Manager."
+                f"Your risk '{risk.title}' was approved by the Project Manager.",
+                redirect_url=url_risk_for(risk.created_by, risk.id),
             )
 
+        # ✅ PM opens PM route
         create_notification(
             user,
             "Risk Approved",
-            f"You approved risk '{risk.title}' in '{risk.project.name}'."
+            f"You approved risk '{risk.title}' in '{risk.project.name}'.",
+            redirect_url=url_risk_for(user, risk.id),
         )
 
         return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
@@ -190,33 +203,32 @@ class RiskViewSet(viewsets.ModelViewSet):
             create_notification(
                 risk.created_by,
                 "Risk Rejected",
-                f"Your risk '{risk.title}' was rejected by the Project Manager."
+                f"Your risk '{risk.title}' was rejected by the Project Manager.",
+                redirect_url=url_risk_for(risk.created_by, risk.id),
             )
 
         create_notification(
             user,
             "Risk Rejected",
-            f"You rejected risk '{risk.title}' in '{risk.project.name}'."
+            f"You rejected risk '{risk.title}' in '{risk.project.name}'.",
+            redirect_url="/risks",
         )
 
         return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
 
     # ==========================================================
-    # TM -> Update Risk STATUS (NEW)
+    # TM -> Update Risk STATUS
     # ==========================================================
     @action(detail=True, methods=["patch"], url_path="tm-status")
     def tm_status(self, request, pk=None):
-        """
-        TM should be able to set: Open / InProgress / Closed
-        Visible in PM dashboard because it's same Risk object.
-        Also sends notifications.
-        """
         risk = self.get_object()
         user = request.user
 
         if getattr(user, "role", None) != "TM":
-            return Response({"detail": "Only Team Members can update risk status."},
-                            status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"detail": "Only Team Members can update risk status."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         if user != risk.created_by and user != risk.assigned_to:
             return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
@@ -224,7 +236,7 @@ class RiskViewSet(viewsets.ModelViewSet):
         if (risk.approval_status or "").lower() != "approved":
             return Response(
                 {"detail": "You can update status only after risk is approved."},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         serializer = RiskTMStatusUpdateSerializer(risk, data=request.data, partial=True)
@@ -236,12 +248,13 @@ class RiskViewSet(viewsets.ModelViewSet):
 
         pm_user = risk.project.created_by
 
-        # Notify PM (if someone else updated)
+        # Notify PM
         if pm_user and pm_user != user and old_status != new_status:
             create_notification(
                 pm_user,
                 "Risk Status Updated",
-                f"TM updated risk '{risk.title}' status: {old_status} → {new_status} (Project: {risk.project.name})."
+                f"TM updated risk '{risk.title}' status: {old_status} → {new_status} (Project: {risk.project.name}).",
+                redirect_url=url_risk_for(pm_user, risk.id),
             )
 
         # Notify TM
@@ -249,13 +262,14 @@ class RiskViewSet(viewsets.ModelViewSet):
             create_notification(
                 user,
                 "Status Saved",
-                f"Risk '{risk.title}' status updated: {old_status} → {new_status}."
+                f"Risk '{risk.title}' status updated: {old_status} → {new_status}.",
+                redirect_url=url_risk_for(user, risk.id),
             )
 
         return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
 
     # ==========================================================
-    # TM -> Suggest Mitigation (unchanged)
+    # TM -> Suggest Mitigation
     # ==========================================================
     @action(detail=True, methods=["patch"], url_path="suggest-mitigation")
     def suggest_mitigation(self, request, pk=None):
@@ -265,7 +279,7 @@ class RiskViewSet(viewsets.ModelViewSet):
         if getattr(user, "role", None) != "TM":
             return Response(
                 {"detail": "Only Team Members can suggest mitigation."},
-                status=status.HTTP_403_FORBIDDEN
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         if user != risk.created_by and user != risk.assigned_to:
@@ -274,7 +288,7 @@ class RiskViewSet(viewsets.ModelViewSet):
         if (risk.approval_status or "").lower() != "approved":
             return Response(
                 {"detail": "You can suggest mitigation only after risk is approved."},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         possible_keys = [
@@ -303,7 +317,7 @@ class RiskViewSet(viewsets.ModelViewSet):
             if not hasattr(risk, f):
                 return Response(
                     {"detail": f"Backend model missing field '{f}'. Add it in Risk model & migrate."},
-                    status=status.HTTP_400_BAD_REQUEST
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
         risk.tm_mitigation_suggestion = suggestion
@@ -327,19 +341,21 @@ class RiskViewSet(viewsets.ModelViewSet):
             create_notification(
                 pm_user,
                 "Mitigation Suggested",
-                f"TM suggested mitigation for risk '{risk.title}' in '{risk.project.name}'."
+                f"TM suggested mitigation for risk '{risk.title}' in '{risk.project.name}'.",
+                redirect_url=url_risk_for(pm_user, risk.id),
             )
 
         create_notification(
             user,
             "Suggestion Submitted",
-            f"Your mitigation suggestion for '{risk.title}' was sent to the PM."
+            f"Your mitigation suggestion for '{risk.title}' was sent to the PM.",
+            redirect_url=url_risk_for(user, risk.id),
         )
 
         return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
 
     # ==========================================================
-    # PM -> Approve & Apply Suggestion (unchanged)
+    # PM -> Approve & Apply Suggestion
     # ==========================================================
     @action(detail=True, methods=["patch"], url_path="approve-suggestion")
     def approve_suggestion(self, request, pk=None):
@@ -355,7 +371,7 @@ class RiskViewSet(viewsets.ModelViewSet):
         if not hasattr(risk, "tm_suggestion_status") or not hasattr(risk, "tm_mitigation_suggestion"):
             return Response(
                 {"detail": "Backend model missing mitigation suggestion fields. Add them & migrate."},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if (risk.tm_suggestion_status or "").lower() != "pending":
@@ -389,19 +405,21 @@ class RiskViewSet(viewsets.ModelViewSet):
             create_notification(
                 tm_user,
                 "Suggestion Approved",
-                f"Your mitigation suggestion for '{risk.title}' was approved and applied by the PM."
+                f"Your mitigation suggestion for '{risk.title}' was approved and applied by the PM.",
+                redirect_url=url_risk_for(tm_user, risk.id),
             )
 
         create_notification(
             user,
             "Suggestion Applied",
-            f"You approved and applied mitigation suggestion for '{risk.title}'."
+            f"You approved and applied mitigation suggestion for '{risk.title}'.",
+            redirect_url=url_risk_for(user, risk.id),
         )
 
         return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
 
     # ==========================================================
-    # PM -> Reject Suggestion (unchanged)
+    # PM -> Reject Suggestion
     # ==========================================================
     @action(detail=True, methods=["patch"], url_path="reject-suggestion")
     def reject_suggestion(self, request, pk=None):
@@ -417,7 +435,7 @@ class RiskViewSet(viewsets.ModelViewSet):
         if not hasattr(risk, "tm_suggestion_status"):
             return Response(
                 {"detail": "Backend model missing 'tm_suggestion_status'. Add it & migrate."},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if (risk.tm_suggestion_status or "").lower() != "pending":
@@ -442,13 +460,15 @@ class RiskViewSet(viewsets.ModelViewSet):
             create_notification(
                 tm_user,
                 "Suggestion Rejected",
-                f"Your mitigation suggestion for '{risk.title}' was rejected by the PM."
+                f"Your mitigation suggestion for '{risk.title}' was rejected by the PM.",
+                redirect_url=url_risk_for(tm_user, risk.id),
             )
 
         create_notification(
             user,
             "Suggestion Rejected",
-            f"You rejected mitigation suggestion for '{risk.title}'."
+            f"You rejected mitigation suggestion for '{risk.title}'.",
+            redirect_url=url_risk_for(user, risk.id),
         )
 
         return Response(RiskSerializer(risk).data, status=status.HTTP_200_OK)
@@ -477,7 +497,7 @@ class RiskMitigationUpdateView(APIView):
             if user != risk.created_by and user != risk.assigned_to:
                 return Response(
                     {"detail": "You do not have permission to update mitigation."},
-                    status=status.HTTP_403_FORBIDDEN
+                    status=status.HTTP_403_FORBIDDEN,
                 )
 
             allowed_data = request.data.copy()
@@ -497,19 +517,25 @@ class RiskMitigationUpdateView(APIView):
                 create_notification(
                     pm_user,
                     "Mitigation Updated",
-                    f"Mitigation progress updated for risk '{risk.title}' in '{risk.project.name}': {before} → {after}."
+                    f"Mitigation progress updated for risk '{risk.title}' in '{risk.project.name}': {before} → {after}.",
+                    redirect_url=url_risk_for(pm_user, risk.id),
                 )
 
             create_notification(
                 user,
                 "Mitigation Saved",
-                f"Mitigation updated for risk '{risk.title}'."
+                f"Mitigation updated for risk '{risk.title}'.",
+                redirect_url=url_risk_for(user, risk.id),
             )
 
             return Response(serializer.data)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
+# =========================
+# GLOBAL RISK LIST
+# =========================
 
 class GlobalRiskListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -531,9 +557,14 @@ class GlobalRiskListView(generics.ListAPIView):
         if role == "PM":
             queryset = queryset.filter(project__created_by=user)
         else:
-            # TM (and others) see only what they created or assigned
             queryset = queryset.filter(Q(created_by=user) | Q(assigned_to=user))
 
+        # support project filter for "My Risks" button
+        project_id = self.request.query_params.get("project")
+        if project_id and str(project_id).isdigit():
+            queryset = queryset.filter(project_id=int(project_id))
+
+        # Existing filters
         risk_level = self.request.query_params.get("risk_level")
         status_param = self.request.query_params.get("status")
         mitigation_status = self.request.query_params.get("mitigation_status")
