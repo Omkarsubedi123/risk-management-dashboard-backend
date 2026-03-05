@@ -13,6 +13,13 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from datetime import timedelta
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")  # Default to "gemini-2.0-flash" if not set
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -182,3 +189,5 @@ FRONTEND_URL = "http://localhost:5137/"
 # GOOGLE_CLIENT_ID = "698212876140-tk30ir0jgr28choen64jhk56fttd6gbf.apps.googleusercontent.com"  # fallback default
 
 # VITE_GOOGLE_CLIENT_ID=698212876140-tk30ir0jgr28choen64jhk56fttd6gbf.apps.googleusercontent.com
+
+print("GEMINI MODEL:", os.getenv("GEMINI_MODEL"))
