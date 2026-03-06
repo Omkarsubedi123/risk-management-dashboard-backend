@@ -14,11 +14,10 @@ class RiskSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
 
-    # assignment must be writable
     assigned_to = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.all(),
         allow_null=True,
-        required=False
+        required=False,
     )
 
     class Meta:

@@ -1,18 +1,22 @@
-from django.utils import timezone
-from rest_framework import viewsets, permissions, status, generics
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.decorators import action
-from django.shortcuts import get_object_or_404
+from django.conf import settings
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+
+from rest_framework import generics, permissions, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from notifications.utils import create_notification, url_risk_for
+
 from .models import Risk
 from .serializers import (
-    RiskSerializer,
     RiskMitigationUpdateSerializer,
+    RiskSerializer,
     RiskTMStatusUpdateSerializer,
 )
+from .services.gemini_ai import generate_ai_mitigation_two_lines
 
 
 class RiskViewSet(viewsets.ModelViewSet):
@@ -61,7 +65,61 @@ class RiskViewSet(viewsets.ModelViewSet):
 
         return Response(RiskSerializer(qs.order_by("-rejected_at"), many=True).data)
 
+    # =========================
+    # AI Mitigation (PM only)
+    # =========================
+    @action(detail=True, methods=["post"], url_path="ai-mitigation")
+    def ai_mitigation(self, request, pk=None):
+        """
+        PM-only: returns a short 2-line mitigation suggestion.
+        Preview only (does not save).
+        Frontend will Apply -> then save via existing mitigation endpoint.
+        """
+        risk = self.get_object()
+        user = request.user
+
+        # PM only and must own the project
+        if getattr(user, "role", None) != "PM" or risk.project.created_by != user:
+            return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
+
+        # Optional: only approved risks
+        if (risk.approval_status or "").lower() != "approved":
+            return Response(
+                {"detail": "AI mitigation is available only for approved risks."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            suggestion = generate_ai_mitigation_two_lines(risk)
+            if not suggestion.strip():
+                return Response(
+                    {"detail": "AI returned empty text. Try again."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            return Response(
+                {"suggestion": suggestion, "model": getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")},
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as e:
+            msg = str(e)
+
+            # Friendly 429 / quota message
+            if "RESOURCE_EXHAUSTED" in msg or "429" in msg or "quota" in msg.lower():
+                return Response(
+                    {"detail": "Free AI limit reached. Please try again later."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
+            return Response(
+                {"detail": f"AI generation failed: {msg}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    # =========================
     # Risk Created Notification + approval workflow
+    # =========================
     def perform_create(self, serializer):
         user = self.request.user
         role = getattr(user, "role", None)
@@ -80,7 +138,6 @@ class RiskViewSet(viewsets.ModelViewSet):
 
             pm_user = risk.project.created_by
 
-            # ✅ PM should open PM risk page
             create_notification(
                 pm_user,
                 "New Risk Submitted",
@@ -88,7 +145,6 @@ class RiskViewSet(viewsets.ModelViewSet):
                 redirect_url=url_risk_for(pm_user, risk.id),
             )
 
-            # ✅ TM should open TM risk page
             create_notification(
                 user,
                 "Risk Submitted",
@@ -99,7 +155,6 @@ class RiskViewSet(viewsets.ModelViewSet):
             risk.approval_status = "approved"
             risk.save(update_fields=["approval_status"])
 
-            # ✅ PM created -> open PM risk page
             create_notification(
                 user,
                 "Risk Created",
@@ -131,14 +186,13 @@ class RiskViewSet(viewsets.ModelViewSet):
     # Risk Deleted Notification (PM only)
     def perform_destroy(self, instance):
         project_name = instance.project.name
-        rid = instance.id
         instance.delete()
 
         create_notification(
             self.request.user,
             "Risk Deleted",
             f"A risk was removed from project '{project_name}'.",
-            redirect_url="/risks",  # list page
+            redirect_url="/risks",
         )
 
     # =========================
@@ -162,7 +216,6 @@ class RiskViewSet(viewsets.ModelViewSet):
         else:
             risk.save(update_fields=["approval_status"])
 
-        # ✅ TM/creator should open TM route if they are TM
         if risk.created_by:
             create_notification(
                 risk.created_by,
@@ -171,7 +224,6 @@ class RiskViewSet(viewsets.ModelViewSet):
                 redirect_url=url_risk_for(risk.created_by, risk.id),
             )
 
-        # ✅ PM opens PM route
         create_notification(
             user,
             "Risk Approved",
@@ -248,7 +300,6 @@ class RiskViewSet(viewsets.ModelViewSet):
 
         pm_user = risk.project.created_by
 
-        # Notify PM
         if pm_user and pm_user != user and old_status != new_status:
             create_notification(
                 pm_user,
@@ -257,7 +308,6 @@ class RiskViewSet(viewsets.ModelViewSet):
                 redirect_url=url_risk_for(pm_user, risk.id),
             )
 
-        # Notify TM
         if old_status != new_status:
             create_notification(
                 user,
@@ -312,29 +362,10 @@ class RiskViewSet(viewsets.ModelViewSet):
         if not suggestion:
             return Response({"detail": "Suggestion is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        needed_fields = ["tm_mitigation_suggestion", "tm_suggestion_status"]
-        for f in needed_fields:
-            if not hasattr(risk, f):
-                return Response(
-                    {"detail": f"Backend model missing field '{f}'. Add it in Risk model & migrate."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
         risk.tm_mitigation_suggestion = suggestion
         risk.tm_suggestion_status = "pending"
 
-        if hasattr(risk, "tm_suggested_at"):
-            risk.tm_suggested_at = timezone.now()
-        if hasattr(risk, "tm_suggested_by"):
-            risk.tm_suggested_by = user
-
-        update_fields = ["tm_mitigation_suggestion", "tm_suggestion_status"]
-        if hasattr(risk, "tm_suggested_at"):
-            update_fields.append("tm_suggested_at")
-        if hasattr(risk, "tm_suggested_by"):
-            update_fields.append("tm_suggested_by")
-
-        risk.save(update_fields=update_fields)
+        risk.save(update_fields=["tm_mitigation_suggestion", "tm_suggestion_status"])
 
         pm_user = risk.project.created_by
         if pm_user:
@@ -368,12 +399,6 @@ class RiskViewSet(viewsets.ModelViewSet):
         if risk.project.created_by != user:
             return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
 
-        if not hasattr(risk, "tm_suggestion_status") or not hasattr(risk, "tm_mitigation_suggestion"):
-            return Response(
-                {"detail": "Backend model missing mitigation suggestion fields. Add them & migrate."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         if (risk.tm_suggestion_status or "").lower() != "pending":
             return Response({"detail": "No pending suggestion to approve."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -384,23 +409,9 @@ class RiskViewSet(viewsets.ModelViewSet):
             risk.mitigation_status = new_status
 
         risk.tm_suggestion_status = "approved"
+        risk.save(update_fields=["mitigation_plan", "mitigation_status", "tm_suggestion_status"])
 
-        if hasattr(risk, "tm_reviewed_at"):
-            risk.tm_reviewed_at = timezone.now()
-        if hasattr(risk, "tm_reviewed_by"):
-            risk.tm_reviewed_by = user
-
-        update_fields = ["mitigation_plan", "tm_suggestion_status"]
-        if new_status in ["NotStarted", "InProgress", "Completed"]:
-            update_fields.append("mitigation_status")
-        if hasattr(risk, "tm_reviewed_at"):
-            update_fields.append("tm_reviewed_at")
-        if hasattr(risk, "tm_reviewed_by"):
-            update_fields.append("tm_reviewed_by")
-
-        risk.save(update_fields=list(set(update_fields)))
-
-        tm_user = getattr(risk, "tm_suggested_by", None) or risk.created_by
+        tm_user = risk.created_by
         if tm_user:
             create_notification(
                 tm_user,
@@ -432,30 +443,13 @@ class RiskViewSet(viewsets.ModelViewSet):
         if risk.project.created_by != user:
             return Response({"detail": "Not allowed."}, status=status.HTTP_403_FORBIDDEN)
 
-        if not hasattr(risk, "tm_suggestion_status"):
-            return Response(
-                {"detail": "Backend model missing 'tm_suggestion_status'. Add it & migrate."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         if (risk.tm_suggestion_status or "").lower() != "pending":
             return Response({"detail": "No pending suggestion to reject."}, status=status.HTTP_400_BAD_REQUEST)
 
         risk.tm_suggestion_status = "rejected"
-        if hasattr(risk, "tm_reviewed_at"):
-            risk.tm_reviewed_at = timezone.now()
-        if hasattr(risk, "tm_reviewed_by"):
-            risk.tm_reviewed_by = user
+        risk.save(update_fields=["tm_suggestion_status"])
 
-        update_fields = ["tm_suggestion_status"]
-        if hasattr(risk, "tm_reviewed_at"):
-            update_fields.append("tm_reviewed_at")
-        if hasattr(risk, "tm_reviewed_by"):
-            update_fields.append("tm_reviewed_by")
-
-        risk.save(update_fields=update_fields)
-
-        tm_user = getattr(risk, "tm_suggested_by", None) or risk.created_by
+        tm_user = risk.created_by
         if tm_user:
             create_notification(
                 tm_user,
@@ -479,7 +473,6 @@ class RiskMitigationUpdateView(APIView):
 
     def patch(self, request, pk):
         """
-        NEW RULE (no collisions):
         - PM (project owner) can update mitigation_plan + mitigation_status
         - TM can update ONLY mitigation_status (progress), NOT the plan
         """
@@ -489,11 +482,9 @@ class RiskMitigationUpdateView(APIView):
 
         pm_user = risk.project.created_by
 
-        # PM can update if owns project
         if role == "PM" and pm_user == user:
             allowed_data = request.data.copy()
         else:
-            # TM must be involved
             if user != risk.created_by and user != risk.assigned_to:
                 return Response(
                     {"detail": "You do not have permission to update mitigation."},
@@ -501,7 +492,6 @@ class RiskMitigationUpdateView(APIView):
                 )
 
             allowed_data = request.data.copy()
-            # TM cannot change mitigation_plan (only status)
             if "mitigation_plan" in allowed_data:
                 allowed_data.pop("mitigation_plan")
 
@@ -512,7 +502,6 @@ class RiskMitigationUpdateView(APIView):
             serializer.save()
             after = risk.mitigation_status
 
-            # Notify PM if TM changed it
             if pm_user and pm_user != user and before != after:
                 create_notification(
                     pm_user,
@@ -533,10 +522,6 @@ class RiskMitigationUpdateView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-# =========================
-# GLOBAL RISK LIST
-# =========================
-
 class GlobalRiskListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = RiskSerializer
@@ -546,35 +531,26 @@ class GlobalRiskListView(generics.ListAPIView):
         role = getattr(user, "role", None)
 
         queryset = Risk.objects.select_related("project", "assigned_to", "created_by")
-
-        # Always hide rejected from global
         queryset = queryset.exclude(approval_status="rejected")
-
-        # Only show approved items in Global Risk Register
         queryset = queryset.filter(approval_status="approved")
 
-        # PM should see ALL approved risks inside their projects (including TM created)
         if role == "PM":
             queryset = queryset.filter(project__created_by=user)
         else:
             queryset = queryset.filter(Q(created_by=user) | Q(assigned_to=user))
 
-        # support project filter for "My Risks" button
         project_id = self.request.query_params.get("project")
         if project_id and str(project_id).isdigit():
             queryset = queryset.filter(project_id=int(project_id))
 
-        # Existing filters
         risk_level = self.request.query_params.get("risk_level")
         status_param = self.request.query_params.get("status")
         mitigation_status = self.request.query_params.get("mitigation_status")
 
         if risk_level:
             queryset = queryset.filter(risk_level=risk_level)
-
         if status_param:
             queryset = queryset.filter(status=status_param)
-
         if mitigation_status:
             queryset = queryset.filter(mitigation_status=mitigation_status)
 

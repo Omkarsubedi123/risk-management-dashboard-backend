@@ -1,17 +1,16 @@
 from django.db import models
 from users.models import CustomUser
 from projects.models import Project
-from django.utils import timezone
 from datetime import timedelta
 
 
 class Risk(models.Model):
-
-    # TM Mitigation Suggestion 
-
+    # =========================
+    # TM Mitigation Suggestion
+    # =========================
     tm_mitigation_suggestion = models.TextField(
         blank=True,
-        help_text="Mitigation suggestion proposed by Team Member"
+        help_text="Mitigation suggestion proposed by Team Member",
     )
 
     TM_SUGGESTION_STATUS_CHOICES = [
@@ -23,21 +22,23 @@ class Risk(models.Model):
     tm_suggestion_status = models.CharField(
         max_length=20,
         choices=TM_SUGGESTION_STATUS_CHOICES,
-        default="pending"
+        default="pending",
     )
 
-
+    # =========================
+    # Approval workflow
+    # =========================
     APPROVAL_CHOICES = [
-    ("pending", "Pending"),
-    ("approved", "Approved"),
-    ("rejected", "Rejected"),
-]
+        ("pending", "Pending"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+    ]
 
     approval_status = models.CharField(
-    max_length=20,
-    choices=APPROVAL_CHOICES,
-    default="approved",  # PM-created risks should be approved automatically
-)
+        max_length=20,
+        choices=APPROVAL_CHOICES,
+        default="approved",  # PM-created risks should be approved automatically
+    )
     rejected_at = models.DateTimeField(null=True, blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
 
@@ -51,6 +52,9 @@ class Risk(models.Model):
             return self.rejected_at + timedelta(days=15)
         return None
 
+    # =========================
+    # Core Risk Fields
+    # =========================
     RISK_DECISION_CHOICES = [
         ("Avoid", "Avoid"),
         ("Mitigate", "Mitigate"),
@@ -82,17 +86,13 @@ class Risk(models.Model):
         ("High", "High"),
     ]
 
-    project = models.ForeignKey(
-        Project,
-        on_delete=models.CASCADE,
-        related_name="risks"
-    )
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="risks")
 
     created_by = models.ForeignKey(
         CustomUser,
         on_delete=models.SET_NULL,
         null=True,
-        related_name="created_risks"
+        related_name="created_risks",
     )
 
     assigned_to = models.ForeignKey(
@@ -100,7 +100,7 @@ class Risk(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="assigned_risks"
+        related_name="assigned_risks",
     )
 
     title = models.CharField(max_length=255)
@@ -110,42 +110,20 @@ class Risk(models.Model):
     impact = models.PositiveIntegerField()
 
     risk_score = models.PositiveIntegerField(blank=True, null=True)
-    likelihood = models.CharField(
-        max_length=10,
-        choices=LIKELIHOOD_CHOICES,
-        blank=True,
-        null=True
-    )
-    risk_level = models.CharField(
-        max_length=10,
-        choices=SEVERITY_CHOICES,
-        blank=True,
-        null=True
-    )
+    likelihood = models.CharField(max_length=10, choices=LIKELIHOOD_CHOICES, blank=True, null=True)
+    risk_level = models.CharField(max_length=10, choices=SEVERITY_CHOICES, blank=True, null=True)
 
-    estimated_cost = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        null=True,
-        blank=True
-    )
+    estimated_cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
-    risk_decision = models.CharField(
-        max_length=20,
-        choices=RISK_DECISION_CHOICES
-    )
+    risk_decision = models.CharField(max_length=20, choices=RISK_DECISION_CHOICES)
 
-    status = models.CharField(
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default="Open"
-    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="Open")
 
     mitigation_plan = models.TextField(blank=True)
     mitigation_status = models.CharField(
         max_length=20,
         choices=MITIGATION_STATUS_CHOICES,
-        default="NotStarted"
+        default="NotStarted",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
