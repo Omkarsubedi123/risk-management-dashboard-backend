@@ -14,6 +14,7 @@ class CustomUser(AbstractUser):
     ROLE_CHOICES = (
         ('PM', 'Project Manager'),
         ('TM', 'Team Member'),
+        ('AD', 'Admin'),
     )
     role = models.CharField(max_length=2, choices=ROLE_CHOICES, default='TM')
     sector = models.CharField(max_length=100, blank=True, null=True)

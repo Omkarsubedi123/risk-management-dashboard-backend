@@ -11,9 +11,12 @@ from .serializers import (
     CustomTokenObtainPairSerializer,
     RequestPasswordResetSerializer,
     ConfirmResetPasswordSerializer,
+    AdminUserListSerializer,
+    AdminDashboardSerializer,
 )
 from .models import CustomUser
-
+from .permissions import IsAdminRole
+from django.db.models import Q
 
 class SignupView(generics.CreateAPIView):
     queryset = CustomUser.objects.all()
@@ -85,9 +88,6 @@ class ConfirmResetPasswordView(APIView):
         return Response({"message": "Password reset successfully."}, status=status.HTTP_200_OK)
 
 
-# ==========================
-# ✅ PROFILE: GET/PATCH /me/
-# ==========================
 class MeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -119,9 +119,6 @@ class MeView(APIView):
         return Response({"detail": "Profile updated successfully."}, status=status.HTTP_200_OK)
 
 
-# =================================
-# ✅ CHANGE PASSWORD: POST /change-password/
-# =================================
 class ChangePasswordView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -146,3 +143,49 @@ class ChangePasswordView(APIView):
         u.set_password(new_password)
         u.save()
         return Response({"detail": "Password changed successfully."}, status=status.HTTP_200_OK)
+
+
+
+# ADMIN MODULE - BACKEND
+
+class AdminDashboardView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        data = {
+            "total_users": CustomUser.objects.count(),
+            "total_pms": CustomUser.objects.filter(role="PM").count(),
+            "total_tms": CustomUser.objects.filter(role="TM").count(),
+            "total_admins": CustomUser.objects.filter(role="AD").count(),
+            "verified_users": CustomUser.objects.filter(is_verified=True).count(),
+            "unverified_users": CustomUser.objects.filter(is_verified=False).count(),
+            "active_users": CustomUser.objects.filter(is_active=True).count(),
+            "inactive_users": CustomUser.objects.filter(is_active=False).count(),
+        }
+
+        serializer = AdminDashboardSerializer(data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminUsersListView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        role = request.query_params.get("role")
+        search = request.query_params.get("search", "").strip()
+
+        users = CustomUser.objects.all().order_by("-date_joined")
+
+        if role in ["PM", "TM", "AD"]:
+            users = users.filter(role=role)
+
+        if search:
+            users = users.filter(
+                Q(email__icontains=search) |
+                Q(username__icontains=search) |
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search)
+            )
+
+        serializer = AdminUserListSerializer(users, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
