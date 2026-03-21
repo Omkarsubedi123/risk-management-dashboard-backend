@@ -5,6 +5,10 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.db.models import Q
+from django.db import transaction
+
+from projects.models import ProjectTeam
 
 from .serializers import (
     SignupSerializer,
@@ -13,10 +17,12 @@ from .serializers import (
     ConfirmResetPasswordSerializer,
     AdminUserListSerializer,
     AdminDashboardSerializer,
+    AdminDeactivatePMSerializer,
+    AdminDeletePMSerializer,
 )
 from .models import CustomUser
 from .permissions import IsAdminRole
-from django.db.models import Q
+
 
 class SignupView(generics.CreateAPIView):
     queryset = CustomUser.objects.all()
@@ -46,7 +52,10 @@ class VerifyOTPView(APIView):
         otp_code = request.data.get("otp_code")
 
         if not email or not otp_code:
-            return Response({"error": "Email and OTP are required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Email and OTP are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             user = CustomUser.objects.get(email=email)
@@ -57,7 +66,7 @@ class VerifyOTPView(APIView):
             user.is_verified = True
             user.is_active = True
             user.otp_code = None
-            user.save()
+            user.save(update_fields=["is_verified", "is_active", "otp_code"])
             return Response({"message": "Email verified successfully"}, status=status.HTTP_200_OK)
 
         return Response({"error": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
@@ -100,6 +109,7 @@ class MeView(APIView):
             "first_name": getattr(u, "first_name", "") or "",
             "last_name": getattr(u, "last_name", "") or "",
             "role": getattr(u, "role", "") or "",
+            "is_active": u.is_active,
         }, status=status.HTTP_200_OK)
 
     def patch(self, request):
@@ -130,23 +140,29 @@ class ChangePasswordView(APIView):
         confirm_password = request.data.get("confirm_password", "")
 
         if not u.check_password(current_password):
-            return Response({"detail": "Current password is incorrect."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "Current password is incorrect."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         if new_password != confirm_password:
-            return Response({"detail": "New password and confirm password do not match."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "New password and confirm password do not match."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
             validate_password(new_password, user=u)
         except ValidationError as e:
-            return Response({"detail": " ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": " ".join(e.messages)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         u.set_password(new_password)
-        u.save()
+        u.save(update_fields=["password"])
         return Response({"detail": "Password changed successfully."}, status=status.HTTP_200_OK)
 
-
-
-# ADMIN MODULE - BACKEND
 
 class AdminDashboardView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsAdminRole]
@@ -189,3 +205,55 @@ class AdminUsersListView(APIView):
 
         serializer = AdminUserListSerializer(users, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminDeactivatePMView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def post(self, request):
+        serializer = AdminDeactivatePMSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        pm = serializer.validated_data["pm"]
+
+        with transaction.atomic():
+            ProjectTeam.objects.filter(user=pm).delete()
+            pm.is_active = False
+            pm.save(update_fields=["is_active"])
+
+        return Response({
+            "detail": "Project Manager deactivated successfully. This user can no longer log in.",
+            "pm": {
+                "id": pm.id,
+                "email": pm.email,
+                "username": pm.username,
+                "role": pm.role,
+                "is_active": pm.is_active,
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class AdminDeletePMView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def post(self, request):
+        serializer = AdminDeletePMSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        pm = serializer.validated_data["pm"]
+
+        pm_info = {
+            "id": pm.id,
+            "email": pm.email,
+            "username": pm.username,
+            "role": pm.role,
+        }
+
+        with transaction.atomic():
+            ProjectTeam.objects.filter(user=pm).delete()
+            pm.delete()
+
+        return Response({
+            "detail": "Project Manager account deleted successfully.",
+            "deleted_pm": pm_info
+        }, status=status.HTTP_200_OK)

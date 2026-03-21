@@ -1,4 +1,3 @@
-# projects/urls.py
 from django.urls import path
 from .views import (
     ProjectListCreateView,
@@ -9,6 +8,9 @@ from .views import (
     InviteAcceptView,
     MyProjectsView,
     ProjectTeamListView,
+    AdminPMListView,
+    AdminProjectsByPMView,
+    AdminTransferOwnershipView,
 )
 
 urlpatterns = [
@@ -21,4 +23,8 @@ urlpatterns = [
     path("my/", MyProjectsView.as_view(), name="my-projects"),
     path("<int:pk>/team/", ProjectTeamListView.as_view(), name="project-team"),
 
+    # Admin
+    path("admin/pms/", AdminPMListView.as_view(), name="admin-pm-list"),
+    path("admin/pms/<int:pm_id>/projects/", AdminProjectsByPMView.as_view(), name="admin-projects-by-pm"),
+    path("admin/transfer-ownership/", AdminTransferOwnershipView.as_view(), name="admin-transfer-ownership"),
 ]

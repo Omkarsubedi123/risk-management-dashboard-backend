@@ -1,9 +1,9 @@
-# projects/serializers.py
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Project, ProjectTeam, Invite
 
 User = get_user_model()
+
 
 class ProjectTeamSerializer(serializers.ModelSerializer):
     email = serializers.SerializerMethodField()
@@ -22,13 +22,13 @@ class ProjectTeamSerializer(serializers.ModelSerializer):
         return obj.user.username or obj.user.email
 
     def get_full_name(self, obj):
-        # Works even if full_name does not exist in User model
         if hasattr(obj.user, "get_full_name"):
             name = obj.user.get_full_name()
             if name:
                 return name
         return obj.user.username or obj.user.email
-   
+
+
 class ProjectSerializer(serializers.ModelSerializer):
     team = ProjectTeamSerializer(source="team.all", many=True, read_only=True)
     created_by_email = serializers.SerializerMethodField()
@@ -44,12 +44,10 @@ class ProjectSerializer(serializers.ModelSerializer):
         return obj.created_by.email if obj.created_by else ""
 
     def get_pm_email(self, obj):
-        # PM in your system is created_by
         return obj.created_by.email if obj.created_by else ""
 
     def get_team_count(self, obj):
         return obj.team.count()
-
 
 
 class InviteSerializer(serializers.ModelSerializer):
@@ -70,8 +68,7 @@ class InviteSerializer(serializers.ModelSerializer):
 
     def get_invited_by_email(self, obj):
         return obj.invited_by.email
-    
-# Team Member part form here 
+
 
 class ProjectSummarySerializer(serializers.ModelSerializer):
     team_count = serializers.SerializerMethodField()
@@ -92,9 +89,52 @@ class ProjectSummarySerializer(serializers.ModelSerializer):
         )
 
     def get_team_count(self, obj):
-        # you use ProjectTeam with related_name "team"
         return obj.team.count()
 
     def get_pm_email(self, obj):
         return obj.created_by.email if obj.created_by else ""
 
+
+class AdminPMListSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+    project_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ("id", "username", "email", "full_name", "project_count")
+
+    def get_full_name(self, obj):
+        if hasattr(obj, "get_full_name"):
+            name = obj.get_full_name()
+            if name:
+                return name
+        return obj.username or obj.email
+
+    def get_project_count(self, obj):
+        return obj.projects.count()
+
+
+class AdminTransferOwnershipSerializer(serializers.Serializer):
+    from_pm_id = serializers.IntegerField()
+    to_pm_id = serializers.IntegerField()
+
+    def validate(self, attrs):
+        from_pm_id = attrs.get("from_pm_id")
+        to_pm_id = attrs.get("to_pm_id")
+
+        if from_pm_id == to_pm_id:
+            raise serializers.ValidationError("Source PM and target PM cannot be the same.")
+
+        try:
+            from_pm = User.objects.get(id=from_pm_id, role="PM", is_active=True)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"from_pm_id": "Source Project Manager not found."})
+
+        try:
+            to_pm = User.objects.get(id=to_pm_id, role="PM", is_active=True)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"to_pm_id": "Target Project Manager not found."})
+
+        attrs["from_pm"] = from_pm
+        attrs["to_pm"] = to_pm
+        return attrs

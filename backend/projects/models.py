@@ -1,8 +1,6 @@
-# projects/models.py
 import uuid
 from django.db import models
 from django.conf import settings
-from django.utils import timezone
 
 
 class Project(models.Model):
@@ -54,19 +52,19 @@ class ProjectTeam(models.Model):
 
 
 class Invite(models.Model):
-    """
-    Invitation record.
-    Keeps accepted boolean for frontend compatibility.
-    """
-
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="invites")
+
     invited_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="sent_invites"
     )
+
     email = models.EmailField()
+
     invited_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -74,11 +72,13 @@ class Invite(models.Model):
         on_delete=models.SET_NULL,
         related_name="received_invites"
     )
+
     role = models.CharField(
         max_length=10,
         choices=ProjectTeam.ROLE_CHOICES,
         default=ProjectTeam.ROLE_TM
     )
+
     accepted = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     accepted_at = models.DateTimeField(null=True, blank=True)

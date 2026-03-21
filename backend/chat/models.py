@@ -2,14 +2,20 @@ from django.db import models
 from django.conf import settings
 
 from projects.models import Project
-from risks.models import Risk  # adjust if your risks app name is different
+from risks.models import Risk
 
 
 class RiskMessage(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="risk_messages")
     risk = models.ForeignKey(Risk, on_delete=models.CASCADE, related_name="chat_messages")
 
-    sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sent_risk_messages")
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sent_risk_messages"
+    )
 
     body = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)

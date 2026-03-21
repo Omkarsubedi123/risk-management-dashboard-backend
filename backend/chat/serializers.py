@@ -6,7 +6,7 @@ from .models import RiskMessage, RiskMessageAttachment
 
 User = get_user_model()
 
-MENTION_RE = re.compile(r"@([A-Za-z0-9_.-]+)")  # @username (supports dot/dash/underscore)
+MENTION_RE = re.compile(r"@([A-Za-z0-9_.-]+)")
 
 
 class RiskMessageAttachmentSerializer(serializers.ModelSerializer):
@@ -51,9 +51,13 @@ class RiskMessageSerializer(serializers.ModelSerializer):
 
     def get_sender_name(self, obj):
         u = obj.sender
+        if not u:
+            return "Deleted User"
         return u.get_full_name() or getattr(u, "username", "") or getattr(u, "email", "")
 
     def get_sender_username(self, obj):
+        if not obj.sender:
+            return ""
         return getattr(obj.sender, "username", "") or ""
 
     def get_is_edited(self, obj):
@@ -61,9 +65,6 @@ class RiskMessageSerializer(serializers.ModelSerializer):
 
 
 class RiskMessageCreateSerializer(serializers.ModelSerializer):
-    """
-    For multipart create: body + files[]
-    """
     files = serializers.ListField(
         child=serializers.FileField(),
         required=False,
@@ -79,7 +80,6 @@ class RiskMessageCreateSerializer(serializers.ModelSerializer):
         files = validated_data.pop("files", [])
         request = self.context["request"]
         user = request.user
-
         risk = validated_data["risk"]
 
         msg = RiskMessage.objects.create(

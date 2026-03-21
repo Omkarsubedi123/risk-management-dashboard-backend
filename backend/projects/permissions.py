@@ -4,19 +4,17 @@ from .models import Project, ProjectTeam
 
 class IsProjectPMOrReadOnly(BasePermission):
     """
-    - Project Manager (PM) can perform all actions
-    - Team members can READ only (safe methods)
+    - Project creator/PM can do all actions
+    - Team members can read only
     """
 
     def has_object_permission(self, request, view, obj):
-        # Allow safe methods to project creator or team members
         if request.method in SAFE_METHODS:
             return (
                 obj.created_by == request.user or
                 ProjectTeam.objects.filter(project=obj, user=request.user).exists()
             )
 
-        # Unsafe methods → only PM allowed
         if obj.created_by == request.user:
             return True
 
@@ -29,22 +27,20 @@ class IsProjectPMOrReadOnly(BasePermission):
 
 class IsProjectPM(BasePermission):
     """
-    Only Project Managers are allowed.
-    (Creator OR team role = PM)
+    Only PM of the project can perform the action.
     """
 
     def has_object_permission(self, request, view, obj):
-        # Creator is always PM
         user = request.user
-        if isinstance(obj,Project):
+
+        if isinstance(obj, Project):
             return obj.created_by == user
-        
+
         if isinstance(obj, ProjectTeam):
             return obj.project.created_by == user
 
-        # Check PM role in team
         return ProjectTeam.objects.filter(
             project=obj,
-            user=request.user,
+            user=user,
             role=ProjectTeam.ROLE_PM
         ).exists()

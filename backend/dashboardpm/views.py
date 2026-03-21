@@ -27,6 +27,26 @@ def _pm_only(request):
     return getattr(user, "role", None) == "PM"
 
 
+def _pm_projects_queryset(user, project_id=None):
+    qs = Project.objects.filter(created_by=user)
+    if project_id:
+        qs = qs.filter(id=project_id)
+    return qs
+
+
+def _pm_risks_queryset(user, project_id=None):
+    """
+    IMPORTANT:
+    PM dashboard must show risks inside projects currently owned by the PM.
+    Do NOT filter by risk.created_by, because after ownership transfer
+    the new PM may not be the original creator of the risk.
+    """
+    qs = Risk.objects.filter(project__created_by=user).exclude(approval_status="rejected")
+    if project_id:
+        qs = qs.filter(project_id=project_id)
+    return qs
+
+
 class PMDashboardSummaryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -37,14 +57,8 @@ class PMDashboardSummaryView(APIView):
         user = request.user
         project_id = _get_project_id(request)
 
-        # Base querysets
-        projects_qs = Project.objects.filter(created_by=user)
-        risks_qs = Risk.objects.filter(created_by=user)
-
-        # Optional project filter
-        if project_id:
-            projects_qs = projects_qs.filter(id=project_id)
-            risks_qs = risks_qs.filter(project_id=project_id)
+        projects_qs = _pm_projects_queryset(user, project_id)
+        risks_qs = _pm_risks_queryset(user, project_id)
 
         data = {
             "total_projects": projects_qs.count(),
@@ -69,10 +83,7 @@ class PMRiskCategoryView(APIView):
         user = request.user
         project_id = _get_project_id(request)
 
-        qs = Risk.objects.filter(created_by=user)
-
-        if project_id:
-            qs = qs.filter(project_id=project_id)
+        qs = _pm_risks_queryset(user, project_id)
 
         qs = (
             qs.values("risk_level")
@@ -80,7 +91,11 @@ class PMRiskCategoryView(APIView):
             .order_by("risk_level")
         )
 
-        data = [{"name": row["risk_level"], "value": row["value"]} for row in qs]
+        data = [
+            {"name": row["risk_level"], "value": row["value"]}
+            for row in qs
+            if row["risk_level"]
+        ]
         return Response(data)
 
 
@@ -102,33 +117,33 @@ class PMRiskTrendView(APIView):
         user = request.user
         project_id = _get_project_id(request)
 
-        qs = Risk.objects.filter(created_by=user)
-
-        if project_id:
-            qs = qs.filter(project_id=project_id)
+        qs = _pm_risks_queryset(user, project_id)
 
         qs = (
             qs.annotate(month=TruncMonth("created_at"))
             .values("month", "risk_level")
             .annotate(count=Count("id"))
-            .order_by("month")
+            .order_by("month", "risk_level")
         )
 
         trend = {}
         for row in qs:
-            if not row["month"]:
+            month_value = row.get("month")
+            level = row.get("risk_level")
+            count = row.get("count", 0)
+
+            if not month_value or not level:
                 continue
 
-            month_label = row["month"].strftime("%b")  # Jan, Feb, etc.
-            level = row["risk_level"]
-            count = row["count"]
+            month_label = month_value.strftime("%b")
 
             if month_label not in trend:
-                trend[month_label] = {"month": month_label}
+                trend[month_label] = {"month": month_label, "Low": 0, "Medium": 0, "High": 0}
 
             trend[month_label][level] = count
 
         return Response(list(trend.values()))
+
 
 class PMRiskHeatmapView(APIView):
     """
@@ -146,19 +161,14 @@ class PMRiskHeatmapView(APIView):
         user = request.user
         project_id = _get_project_id(request)
 
-        qs = Risk.objects.filter(created_by=user)
-        if project_id:
-            qs = qs.filter(project_id=project_id)
+        qs = _pm_risks_queryset(user, project_id)
 
-        # group by impact & probability
         agg = (
             qs.values("impact", "probability")
               .annotate(count=Count("id"))
+              .order_by("impact", "probability")
         )
 
-        # build 5x5 matrix
-        # rows: impact 5->1 (top to bottom)
-        # cols: probability 1->5 (left to right)
         matrix = [[0 for _ in range(5)] for _ in range(5)]
 
         for row in agg:
